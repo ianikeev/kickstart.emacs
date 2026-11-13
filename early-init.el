@@ -1,7 +1,11 @@
-;; -*- lexical-binding: t; -*-
-
 ;; Make startup faster by reducing the frequency of garbage collection. This will be set back when startup finishes.
 ;; We also increase Read Process Output Max so Emacs can read more data.
+
+;; Start maximized or true fullscreen with "fullboth"
+(setq frame-resize-pixelwise t)
+
+(add-to-list 'initial-frame-alist '(fullscreen . maximized))
+(add-to-list 'default-frame-alist '(fullscreen . maximized))
 
 ;; Set garbage collector (from doom emacs)
 ;; About 0.02 faster
@@ -29,10 +33,10 @@
 
 ;; Fix white flash on startup
 ;; Don't do it when using daemon or terminal, because it messes up the background color.
-;; (unless (or (daemonp) (not initial-window-system))
-;;   (setq default-frame-alist '(
-;;                               (foreground-color . "white")
-;;                               (background-color . "#181818"))))
+(unless (or (daemonp) (not initial-window-system))
+  (setq default-frame-alist '(
+                              (foreground-color . "white")
+                              (background-color . "#181818"))))
 
 ;; Disable UI elements before UI initialization.
 ;; For faster startup times. It gives 0.05 sec.
@@ -41,11 +45,16 @@
 (push '(vertical-scroll-bars) default-frame-alist) ; Disable the scroll bar
 
 ;;; FONTS
-;; Startup about 0.01 faster
+;; Startup about 0.01
 (set-face-attribute 'default nil
-                    ;; :font "JetBrains Mono" ; Set your favorite type of font or download JetBrains Mono
-                    :height 120
-                    :weight 'medium)
+                    :font "Iosevka" ; Set your favorite type of font or download JetBrains Mono
+                    :height 160
+                    :weight 'regular)
+
+(set-face-attribute 'variable-pitch nil
+                    :family "Iosevka Aile"
+                    :height 1.0
+                    :weight 'regular)
 ;; This sets the default font on all graphical frames created after restarting Emacs.
 ;; Does the same thing as 'set-face-attribute default' above, but emacsclient fonts
 ;; are not right unless I also add this method of setting the default font.

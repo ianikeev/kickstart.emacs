@@ -59,6 +59,7 @@
   - [[#which-key][Which-Key]]
   - [[#ws-butler][Ws-butler]]
   - [[#esup][Esup]]
+  - [[#lisp-languages][Lisp Languages]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -396,8 +397,8 @@ Only works with package.el.
       (scroll-conservatively 10) ; Smooth scrolling
       (scroll-margin 8)
 
-      ;; (pixel-scroll-precision-mode t) ; Precise pixel scrolling. i.e. smooth scrolling (GUI only)
-      ;; (pixel-scroll-precision-use-momentum nil)
+      (pixel-scroll-precision-mode t) ; Precise pixel scrolling. i.e. smooth scrolling (GUI only)
+      (pixel-scroll-precision-use-momentum nil)
 
       (indent-tabs-mode nil) ; Only use spaces for indentation
       (tab-width 4)
@@ -505,8 +506,8 @@ Note: The Leader key is what you will press when you want to access your keybind
       (general-create-definer start/leader-keys
         ;; :states '(normal insert visual motion emacs) ; <- evil
         :keymaps 'override
-        :prefix "C-SPC"
-        :global-prefix "C-SPC") ; Set global leader key so we can access our keybindings from any state
+        :prefix "C-c"
+        :global-prefix "C-c") ; Set global leader key so we can access our keybindings from any state
 
       (start/leader-keys
         "." '(find-file :wk "Find file")
@@ -671,7 +672,7 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
 ** Transparency
 With Emacs version 29, true transparency has been added.
 #+begin_src emacs-lisp
-    (add-to-list 'default-frame-alist '(alpha-background . 90)) ; For all new frames henceforth
+    (add-to-list 'default-frame-alist '(alpha-background . 100)) ; For all new frames henceforth
 
     ;; Transparency in terminal
     (defun start/tui-enable-transparency ()
@@ -933,6 +934,8 @@ Much easier than org-tempo
 #+begin_src emacs-lisp
     (use-package org
       :ensure nil
+      :init
+      (setq org-startup-indented t)
       :custom
       (org-edit-src-content-indentation 4) ; Set src block automatic indent to 4 instead of 2.
       (org-return-follows-link t)   ; Sets RETURN key in org-mode to follow links
@@ -949,12 +952,84 @@ Much easier than org-tempo
 
 **** Org Superstar
 Prettify headings and plain lists in Org mode. Modern version of org-bullets.
-#+begin_src emacs-lisp
-    (use-package org-superstar
-      :after org
-      :hook (org-mode . org-superstar-mode))
+#+begin_src emacs-lisp :tangle no
+;    (use-package org-superstar
+;      :after org
+;      :hook (org-mode . org-superstar-mode))
 #+end_src
 
+**** Org-modern
+Make org-mode really beautiful.
+#+begin_src emacs-lisp
+    (use-package org-modern
+      :ensure t
+      :after org
+      :hook (org-mode . org-modern-mode)
+      :config
+      (add-hook 'org-agenda-finalize-hook #'org-modern-agenda))
+#+end_src
+
+**** Org-modern-indent
+#+begin_src emacs-lisp
+    (use-package org-modern-indent
+      :vc (:url "https://github.com/ianikeev/org-modern-indent.git"
+                :rev :newest)
+      :after org-modern
+      :config
+      ;; Enable after org-modern
+      (add-hook 'org-mode-hook #'org-modern-indent-mode 90))
+#+end_src
+
+**** Use fixed-pitch font in tables and source code
+#+begin_src emacs-lisp
+    (with-eval-after-load 'org-faces
+      (set-face-attribute 'org-table 'nil
+                          :inherit 'fixed-pitch)
+      (set-face-attribute 'org-code 'nil
+                          :inherit 'fixed-pitch)
+      (set-face-attribute 'org-verbatim 'nil
+                          :inherit 'fixed-pitch))
+    (add-hook 'org-mode-hook #'variable-pitch-mode)
+#+end_src
+**** Org-novelist
+Write stories and novels with Org-mode.
+#+begin_src emacs-lisp
+    (use-package org-novelist
+      :vc (:url "https://github.com/ianikeev/org-novelist.git"
+                :rev :newest)  ; Use the latest commit, rather than the latest release. For latest release, remove ":rev :newest"
+      :config
+      (load (expand-file-name "private.el" user-emacs-directory) t)
+      :custom
+      (org-novelist-automatic-referencing-p nil)  ; Set this variable to
+                                                ; 't' if you want Org
+                                                ; Novelist to always
+                                                ; keep note links up to
+                                                ; date. This may slow
+                                                ; down some systems when
+                                                ; operating on complex
+                                                ; stories. It defaults
+                                                ; to 'nil' when not set
+      :bind (("C-c n n s" . org-novelist-new-story)
+             :map org-novelist-mode-map
+             ("C-c n n c" . org-novelist-new-chapter)
+             ("C-c n d c" . org-novelist-destroy-chapter)
+             ("C-c n r c" . org-novelist-rename-chapter)
+             ("C-c n n a" . org-novelist-new-character)
+             ("C-c n d a" . org-novelist-destroy-character)
+             ("C-c n r a" . org-novelist-rename-character)
+             ("C-c n n p" . org-novelist-new-prop)
+             ("C-c n d p" . org-novelist-destroy-prop)
+             ("C-c n r p" . org-novelist-rename-prop)
+             ("C-c n n l" . org-novelist-new-place)
+             ("C-c n d l" . org-novelist-destroy-place)
+             ("C-c n r l" . org-novelist-rename-place)
+             ("C-c n u"   . org-novelist-update-references)
+             ("C-c n r s" . org-novelist-rename-story)
+             ("C-c n e"   . org-novelist-export-story)
+             ("C-c n l l" . org-novelist-link-to-story)
+             ("C-c n l u" . org-novelist-unlink-from-story)
+             ("C-c n t"   . org-novelist-toggle-automatic-referencing)))
+#+end_src
 ** Terminal
 *** Eat
 Eat(Emulate A Terminal) is a terminal emulator within Emacs.
@@ -1267,7 +1342,7 @@ Check out their [[https://github.com/minad/consult][git repository]] for more aw
 
 ** Helpful
 An alternative to the built-in Emacs help that provides much more contextual information.
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle no
     (use-package helpful
       :bind
       ;; Note that the built-in `describe-function' includes both functions
@@ -1369,4 +1444,73 @@ Benchmark Emacs Startup time: M-x esup
       :defer t
       :custom
       (esup-depth 0))
+#+end_src
+
+** Lisp Languages
+Common Lisp and Emacs Lisp editing support etc.
+#+begin_src emacs-lisp
+                    ;; Structural editing for all Lisp modes
+                    (use-package paredit
+                      :ensure t
+                      :hook ((emacs-lisp-mode . paredit-mode)
+                             (lisp-mode . paredit-mode)
+                             (slime-repl-mode . paredit-mode)))
+
+                    (use-package eldoc
+                      :ensure nil
+                      :init
+                      (global-eldoc-mode 1))
+
+                    ;; Configure default Lisp executable
+                    (setq inferior-lisp-program "sbcl")
+
+                    ;; Install and configure SLIME
+                    (use-package slime
+                      :ensure t
+                      :config
+                      (slime-setup '(slime-fancy slime-quicklisp slime-asdf))
+                      :bind
+                      (:map lisp-mode-map
+                            ("C-c C-c" . slime-compile-defun)
+                            ("C-c C-k" . slime-compile-and-load-file)
+                            ("C-c C-z" . slime-switch-to-output-buffer)))
+
+                    ;; Setup local Common Lisp Hyperspec access
+                    (load "/home/igor/quicklisp/clhs-use-local.el" t)
+
+                    ;; 1. Configure EWW specifically for *clhs* (disable images, inherit mono font, and disable hard line wrapping)
+                    (add-hook 'eww-mode-hook
+                              (lambda ()
+                                (when (equal (buffer-name) "*clhs*")
+                                  (setq-local shr-inhibit-images t)
+                                  (setq-local shr-use-fonts nil)
+                                  (setq-local shr-fill-text nil) ; Prevent shr from inserting hard line breaks
+                                  (buffer-face-set 'fixed-pitch)
+                                  (visual-line-mode 1))))
+
+                    ;; 2. Robust dedicated CLHS handler: Display window FIRST, then render
+                   (defun my/eww-browse-clhs (url &optional _new-window)
+                     "Open local HyperSpec URL in a dedicated *clhs* EWW buffer, displayed in a side split before rendering."
+                     (let ((buf (get-buffer-create "*clhs*")))
+                       (with-current-buffer buf
+                         (unless (derived-mode-p 'eww-mode)
+                           (eww-mode)))
+                       (when-let ((win (display-buffer buf)))
+                         (select-window win)
+                         (with-current-buffer buf
+                           (eww url)))))
+
+                    ;; 3. Route local HyperSpec URLs
+                    (setq browse-url-handlers
+                          '(("file:///home/igor/quicklisp/.*" . my/eww-browse-clhs)
+                            ("." . browse-url-default-browser)))
+
+                    ;; 4. Display *clhs* in a dedicated right side split
+                    (add-to-list 'display-buffer-alist
+                                 '("\\*clhs\\*"
+                                   (display-buffer-reuse-window display-buffer-in-side-window)
+                                   (side . right)
+                                   (slot . 0)
+                                   (window-width . 0.45)
+                                   (reusable-frames . visible)))
 #+end_src

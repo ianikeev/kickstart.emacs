@@ -5,6 +5,7 @@
 /.session
 /session.*
 *.elc
+*.eld
 CVS
 .svn
 *~
@@ -65,6 +66,6 @@ site-lisp/package/
 /undo-fu-session
 /mason
 /friendly-snippets
-
+private.el
 # If you only want to use init.org
-#/init.el
+/init.el
