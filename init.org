@@ -1476,7 +1476,7 @@ Common Lisp and Emacs Lisp editing support etc.
                             ("C-c C-z" . slime-switch-to-output-buffer)))
 
                     ;; Setup local Common Lisp Hyperspec access
-                    (load "/home/igor/quicklisp/clhs-use-local.el" t)
+                    (load (expand-file-name "quicklisp/clhs-use-local.el" "~") t)
 
                     ;; 1. Configure EWW specifically for *clhs* (disable images, inherit mono font, and disable hard line wrapping)
                     (add-hook 'eww-mode-hook
@@ -1502,7 +1502,7 @@ Common Lisp and Emacs Lisp editing support etc.
 
                     ;; 3. Route local HyperSpec URLs
                     (setq browse-url-handlers
-                          '(("file:///home/igor/quicklisp/.*" . my/eww-browse-clhs)
+                          `((,(concat "^file://" (regexp-quote (expand-file-name "quicklisp/" "~"))) . my/eww-browse-clhs)
                             ("." . browse-url-default-browser)))
 
                     ;; 4. Display *clhs* in a dedicated right side split
