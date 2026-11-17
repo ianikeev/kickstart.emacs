@@ -15,6 +15,7 @@
   - [[#startup-performance][Startup Performance]]
   - [[#auto-tangle-configuration-file][Auto-tangle Configuration file]]
   - [[#show-startup-time][Show startup time]]
+  - [[#network-reliability][Network reliability]]
   - [[#package-manager][Package manager]]
   - [[#good-defaults][Good Defaults]]
 - [[#important-to-load-first][Important to load first]]
@@ -60,6 +61,10 @@
   - [[#ws-butler][Ws-butler]]
   - [[#esup][Esup]]
   - [[#lisp-languages][Lisp Languages]]
+- [[#browsing][Browsing]]
+  - [[#shr-rendering][Shr Rendering]]
+  - [[#eww-keybindings-and-helpers][EWW Keybindings and Helpers]]
+  - [[#url-routing--external-programs][URL Routing & External Programs]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -254,6 +259,129 @@ automatically exports the configuration here to the associated output files.
     (add-hook 'emacs-startup-hook #'start/display-startup-time)
 #+end_src
 
+** Network reliability
+EWW and package.el retrieve URLs through the same layers: =url-retrieve= -> GnuTLS -> TCP.
+When one of those layers stalls, EWW hangs on "Loading <url>..." forever and
+=package-refresh-contents= hangs on "Contacting host: melpa.org" — one root cause,
+two symptoms (the two problems you saw are connected).  C-g always recovers because
+Emacs is waiting inside a process filter (interruptible), not inside a blocking syscall.
+
+Usual suspects, in order of likelihood:
+1. *Stale proxy settings* left in the environment by a VPN/proxy client.
+   Check =M-: (list (getenv "https_proxy") (getenv "http_proxy"))= and
+   =C-h v url-proxy-services=.  If Emacs should not use a proxy at all:
+   =(setq url-proxy-services nil)=.
+2. *Broken IPv6*: Emacs dials the AAAA address first and waits out the OS timeout.
+   Compare in a shell: =curl -4 https://news.ycombinator.com= vs =curl -6 ...=;
+   if only -6 hangs, the IPv6 route is black-holed (fix on the OS/router side).
+3. *Stalled TLS handshake*: black-holed MTU on PPPoE/VPN links, or the historical
+   GnuTLS 3.6 TLS 1.3 hang (Emacs bug#34293).
+4. *A hidden NSM prompt*: the Network Security Manager can be waiting on a
+   minibuffer question about a certificate — check the minibuffer/echo area.
+
+When something hangs, run =M-x my/net-doctor=: it probes TCP, TLS and url.el
+separately and reports which layer is stuck.
+#+begin_src emacs-lisp
+    ;; Debugging aids — leave commented out until needed:
+    ;; (setq url-debug t)          ; log every url.el step to *URL-DEBUG*
+    ;; (setq gnutls-log-level 2)   ; log the TLS handshake to *Messages*
+
+    ;; EWW fetches page images through a work queue; make stuck image
+    ;; fetches give up instead of piling up on a flaky connection.
+    (setq url-queue-timeout 10)
+
+    ;; Fix for permanent "Contacting host" hangs with GnuTLS 3.6.x
+    ;; (Emacs bug#34293): stop offering TLS 1.3.  Only enable this if
+    ;; my/net-doctor shows TLS connections timing out.
+    ;; (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3")
+
+    ;; Don't let a manual M-x package-refresh-contents hang forever
+    ;; either: give the archive download two minutes, then report.
+    (define-advice package-refresh-contents
+        (:around (orig-fn &rest args) my/refresh-timeout)
+      "Give up after two minutes instead of hanging on a stalled network."
+      (condition-case err
+          (with-timeout (120) (apply orig-fn args))
+        ((error timeout)
+         (message "package-refresh-contents aborted: %s; network looks broken, try M-x my/net-doctor"
+                  (error-message-string err))
+         nil)))
+
+    (defun my/net-doctor ()
+      "Probe the network layers EWW and package.el depend on.
+Run this while a page is stuck on \"Loading URL...\" or package.el is
+stuck on \"Contacting host: ...\".  Every probe gets 20 seconds.
+TCP fails     -> DNS or routing problem (compare curl -4 / curl -6).
+TLS fails     -> GnuTLS problem, see the notes in this section.
+url.el fails  -> check `url-proxy-services' and environment proxies.
+Everything ok -> the site was slow, or a hidden NSM prompt is waiting.
+If net-doctor itself hangs, DNS is stuck: test `getent hosts melpa.org'."
+      (interactive)
+      (let ((report nil))
+        (dolist (probe
+                 (list
+                  (list "TCP  news.ycombinator.com:80"
+                        (lambda ()
+                          (delete-process
+                           (open-network-stream "nd-tcp-1" nil "news.ycombinator.com" 80))))
+                  (list "TCP  elpa.gnu.org:80"
+                        (lambda ()
+                          (delete-process
+                           (open-network-stream "nd-tcp-2" nil "elpa.gnu.org" 80))))
+                  (list "TLS  news.ycombinator.com:443"
+                        (lambda ()
+                          (delete-process
+                           (open-network-stream "nd-tls-1" nil "news.ycombinator.com" 443 :type 'tls))))
+                  (list "TLS  melpa.org:443"
+                        (lambda ()
+                          (delete-process
+                           (open-network-stream "nd-tls-2" nil "melpa.org" 443 :type 'tls))))
+                  (list "url  https://news.ycombinator.com"
+                        (lambda ()
+                          (let ((buf (url-retrieve-synchronously
+                                      "https://news.ycombinator.com" t nil 15)))
+                            (unless (bufferp buf)
+                              (error "url-retrieve-synchronously returned nil"))
+                            (kill-buffer buf))))))
+          (let* ((label (car probe))
+                 (probe-fn (cadr probe))
+                 (start (current-time))
+                 (status (condition-case err
+                             (with-timeout (20 'timed-out)
+                               (funcall probe-fn)
+                               'ok)
+                           ((error timeout)
+                            (format "FAILED: %s" (error-message-string err))))))
+            (push (format "%-32s %-14s (%.1fs)\n" label
+                          (cond ((eq status 'timed-out) "HANG (>20s)")
+                                ((eq status 'ok) "ok")
+                                (t status))
+                          (float-time (time-since start)))
+                  report)))
+        (push (format "GnuTLS compiled in: %s\n"
+                      (if (and (fboundp 'gnutls-available-p) (gnutls-available-p))
+                          "yes"
+                        "NO - https cannot work at all"))
+              report)
+        (push (format "Proxy env vars: %s\n"
+                      (or (getenv "https_proxy") (getenv "HTTPS_PROXY")
+                          (getenv "http_proxy") (getenv "HTTP_PROXY")
+                          "none"))
+              report)
+        (push (format "url-proxy-services: %S\n"
+                      (if (boundp 'url-proxy-services)
+                          url-proxy-services
+                        "(url.el not loaded yet)"))
+              report)
+        (with-current-buffer (get-buffer-create "*net-doctor*")
+          (erase-buffer)
+          (insert "Emacs network doctor - " (current-time-string) "\n\n")
+          (dolist (line (nreverse report))
+            (insert line))
+          (special-mode)
+          (pop-to-buffer (current-buffer)))))
+#+end_src
+
 ** Package manager
 We use the default built in package manager package.el.
 
@@ -283,6 +411,63 @@ Instead, you'll only need to use :ensure nil when you want to explicitly prevent
 #+begin_src emacs-lisp
     (require 'use-package-ensure) ; Load use-package-always-ensure
     (setq use-package-always-ensure t) ; Always ensures that a package is installed
+#+end_src
+
+**** Resilient bootstrap
+The stock =:ensure= machinery (=use-package-ensure-installed=) calls
+=package-refresh-contents= synchronously during startup whenever a package is
+missing from =package-archive-contents=.  On a slow or broken network that
+freezes init on "Contacting host: melpa.org" with no timeout, and C-g leaves you
+with half-installed packages.  The redefinition below (deliberately shadowing
+the built-in of the same name, and tolerant of extra arguments) bounds every
+bootstrap download, reports what it skipped, and lets startup continue; you
+then fix the network (=M-x my/net-doctor=) and run =M-x package-refresh-contents=
+plus =M-x package-install= by hand.
+
+#+begin_src emacs-lisp
+    (defvar my/package-bootstrap-timeout 45
+      "Seconds a single package download may block startup before we give up.")
+
+    (defvar my/package-refresh-done nil
+      "Non-nil once package archives were refreshed during this startup.")
+
+    (defvar my/package-network-down nil
+      "Non-nil after the first bootstrap download failure in this session.
+Further missing packages are skipped so that startup still finishes.")
+
+    (defun use-package-ensure-installed (package &rest _ignored)
+      "Drop-in replacement for the built-in `use-package-ensure-installed'.
+The stock version refreshes package archives synchronously whenever a
+package is missing from `package-archive-contents', which can freeze
+startup on a broken network.  This one bounds every bootstrap download
+with `my/package-bootstrap-timeout', reports what it skipped, and lets
+startup continue.  Afterwards fix the network (see `my/net-doctor')
+and run: M-x package-refresh-contents, then M-x package-install RET
+PACKAGE."
+      (unless (package-installed-p package)
+        (cond
+         (my/package-network-down
+          (message "[bootstrap] network down; skipping %s" package))
+         (t
+          (condition-case err
+              (let ((result
+                     (with-timeout (my/package-bootstrap-timeout 'timed-out)
+                       (unless (or my/package-refresh-done
+                                   (assoc package package-archive-contents))
+                         (package-refresh-contents)
+                         (setq my/package-refresh-done t))
+                       (package-install package)
+                       'installed)))
+                (unless (eq result 'installed)
+                  (setq my/package-network-down t)
+                  (message "[bootstrap] installing %s timed out after %ss; skipping it"
+                           package my/package-bootstrap-timeout)))
+            ((error timeout)
+             (setq my/package-network-down t)
+             (message "[bootstrap] could not install %s (%s); skipping it"
+                      package (error-message-string err))
+             (message "[bootstrap] once online again: M-x package-refresh-contents, then M-x package-install RET %s"
+                      package)))))))
 #+end_src
 
 **** Most used parts of use-package
@@ -1516,9 +1701,10 @@ Common Lisp and Emacs Lisp editing support etc.
             (eww url)))))
 
      ;; 3. Route local HyperSpec URLs
-     (setq browse-url-handlers
-           `((,(concat "^file://" (regexp-quote (expand-file-name "quicklisp/" "~"))) . my/eww-browse-clhs)
-             ("." . browse-url-default-browser)))
+     ;; `browse-url-handlers' moved to the Browsing section, which now owns
+     ;; the whole routing table (mpv for videos, pdf-tools for PDFs, elpher
+     ;; for gopher/gemini, EWW as the default browser) and still routes
+     ;; local quicklisp HyperSpec pages to my/eww-browse-clhs above.
 
      ;; 4. Display *clhs* in a dedicated right side split
      (add-to-list 'display-buffer-alist
@@ -1542,4 +1728,122 @@ Common Lisp and Emacs Lisp editing support etc.
       (avy-keys '(?a ?s ?d ?f ?h ?j ?k ?l))
       (avy-style 'at-full)
       (avy-all-windows t))
+#+end_src
+
+* Browsing
+Emacs as the primary browser, following the setup described in
+https://joshblais.com/blog/emacs-as-my-browser/, adapted to this
+configuration: =my/= naming convention, the local HyperSpec routing from
+the Lisp Languages section folded into the same routing table, and
+graceful fallbacks (mpv missing -> EWW, pdf-tools missing -> doc-view).
+
+Built into EWW already, nothing to configure: =R= runs =eww-readable=
+(reader mode), =&= re-opens the page in
+=browse-url-secondary-browser-function=, =b= goes back a page, =q= quits
+the buffer.
+
+** Shr Rendering
+Shr is the HTML renderer behind EWW; keep pages monospaced and narrow.
+#+begin_src emacs-lisp
+    (setq shr-width 100                  ; fixed text width; overrides shr-max-width while set
+          shr-max-width 120              ; max width when shr-width is nil
+          shr-use-fonts nil              ; render everything in the default (mono) font
+          ;; Inline images up to 800x600 px; bigger ones get their own line.
+          shr-max-inline-image-size '(800 . 600)
+          shr-image-animate t)           ; animate GIFs
+    ;; NOTE: the blog post sets `shr-indentation' and `shr-max-image-size',
+    ;; but neither is a user option in Emacs 31: `shr-indentation' is an
+    ;; internal rendering variable and `shr-max-image-size' does not exist
+    ;; (setting them would silently do nothing).  `shr-max-inline-image-size'
+    ;; is the real equivalent of the latter.
+#+end_src
+
+** EWW Keybindings and Helpers
+#+begin_src emacs-lisp
+    ;; Search prefix: Josh Blais' SearX instance.  If searches hang or come
+    ;; back empty, switch to your own SearXNG or the stock DuckDuckGo:
+    ;; "https://duckduckgo.com/html/?q="
+    (setq eww-search-prefix "https://duckduckgo.com/html/?q=")
+
+    ;; Where `D' below and EWW's own download commands save files.
+    (setq eww-download-directory (expand-file-name "~/Downloads/"))
+
+    ;; Zoom with = - 0
+    (with-eval-after-load 'eww
+      (define-key eww-mode-map (kbd "=") #'text-scale-increase)
+      (define-key eww-mode-map (kbd "-") #'text-scale-decrease)
+      (define-key eww-mode-map (kbd "0") #'text-scale-adjust))
+
+    ;; Convenience keys
+    (with-eval-after-load 'eww
+      (define-key eww-mode-map (kbd "b") #'eww-back-url)
+      (define-key eww-mode-map (kbd "a") #'eww-add-bookmark)
+      (define-key eww-mode-map (kbd "U") #'shr-copy-url) ; yank URL at point
+      (define-key eww-mode-map (kbd "D") #'my/eww-download-image-at-point))
+
+    (defun my/eww-download-image-at-point ()
+      "Download the image at point to `eww-download-directory'."
+      (interactive)
+      (let ((url (or (get-text-property (point) 'image-url)
+                     (get-text-property (point) 'shr-url))))
+        (if (not url)
+            (message "No image at point")
+          (let* ((filename (file-name-nondirectory
+                            (url-filename (url-generic-parse-url url))))
+                 (dest (expand-file-name filename eww-download-directory)))
+            (make-directory eww-download-directory t)
+            (url-copy-file url dest t)
+            (message "Saved: %s" dest)))))
+#+end_src
+
+** URL Routing & External Programs
+Videos go to mpv, PDFs open inside Emacs, gopher/gemini go to elpher,
+local HyperSpec pages go to the dedicated =*clhs*= buffer (Lisp Languages
+section), and everything else opens in EWW.  This table only routes links
+opened through Emacs (=org-open-at-point=, package buttons, =M-x
+browse-url=); =M-x eww= is always EWW.
+
+#+begin_src emacs-lisp
+    (defun my/browse-url-mpv (url &rest _args)
+      "Open URL in mpv (video sites); fall back to EWW when mpv is missing."
+      (if (executable-find "mpv")
+          (start-process "mpv" nil "mpv" url)
+        (message "mpv not found, opening in EWW instead")
+        (eww-browse-url url)))
+
+    (defun my/browse-url-pdf (url &rest _args)
+      "Fetch a remote PDF and open it inside Emacs.
+Uses pdf-tools when installed, built-in doc-view otherwise."
+      (let ((tmp (make-temp-file "emacs-pdf-" nil ".pdf")))
+        (url-copy-file url tmp t)
+        (find-file-other-window tmp)
+        (when (fboundp 'pdf-view-mode)
+          (pdf-view-mode))))
+
+    ;; Gopher and gemini, the smolweb.  Loaded eagerly on purpose so
+    ;; `elpher-browse-url-elpher' is defined when a gemini:// link is
+    ;; clicked.
+    (use-package elpher
+      :ensure t)
+
+    ;; Render PDFs with pdf-tools instead of doc-view.  Delete this block
+    ;; if you prefer doc-view; the handler above copes either way.
+    (use-package pdf-tools
+      :ensure t
+      :mode ("\\.pdf\\'" . pdf-view-mode))
+
+    ;; First matching regexp wins; "." makes EWW the default browser.
+    (setq browse-url-handlers
+          `(("\\(youtube\\.com\\|youtu\\.be\\|vimeo\\.com\\|twitch\\.tv\\)" . my/browse-url-mpv)
+            ("\\.mp4$" . my/browse-url-mpv)
+            ("\\.pdf$" . my/browse-url-pdf)
+            ("^gemini://" . elpher-browse-url-elpher)
+            ("^gopher://" . elpher-browse-url-elpher)
+            (,(concat "^file://" (regexp-quote (expand-file-name "quicklisp/" "~")))
+             . my/eww-browse-clhs)
+            ("." . eww-browse-url)))
+
+    ;; Where "&" in EWW sends pages that EWW cannot render.
+    (setq browse-url-secondary-browser-function 'browse-url-generic
+          browse-url-generic-program "firefox") ; adjust to firefox, google-chrome, ...
 #+end_src
