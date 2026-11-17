@@ -25,6 +25,7 @@
   - [[#undo][Undo]]
 - [[#appearance][Appearance]]
   - [[#set-theme][Set Theme]]
+  - [[#automatic-modus-themes][Automatic Modus themes]]
   - [[#transparency][Transparency]]
   - [[#doom-modeline][Doom Modeline]]
   - [[#nerd-icons][Nerd Icons]]
@@ -1032,7 +1033,7 @@ Set fonts in the early-init.el file
 ** Set Theme
 A megapack of themes for GNU Emacs.
 Use consult-theme to easily try out themes (*Epilepsy* Warning).
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle no
     (use-package doom-themes
       :custom
       ;; Global settings (defaults)
@@ -1044,9 +1045,21 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
       (doom-themes-org-config))
 #+end_src
 
+** Automatic Modus themes
+Set light/dark modus theme according to the OS appearance setting
+#+begin_src emacs-lisp
+    (use-package auto-dark
+      :ensure t
+      :custom
+      ;; order is (dark) (light)
+      (auto-dark-themes '((modus-vivendi) (modus-operandi)))
+      :config
+      (auto-dark-mode 1))
+#+end_src
+
 ** Transparency
 With Emacs version 29, true transparency has been added.
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle no
     (add-to-list 'default-frame-alist '(alpha-background . 100)) ; For all new frames henceforth
 
     ;; Transparency in terminal
