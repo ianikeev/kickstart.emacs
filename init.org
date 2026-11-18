@@ -16,7 +16,6 @@
   - [[#auto-tangle-configuration-file][Auto-tangle Configuration file]]
   - [[#show-startup-time][Show startup time]]
   - [[#network-reliability][Network reliability]]
-  - [[#when-emacs-is-stuck--the-runbook][When Emacs is stuck — the runbook]]
   - [[#package-manager][Package manager]]
   - [[#good-defaults][Good Defaults]]
 - [[#important-to-load-first][Important to load first]]
@@ -25,7 +24,6 @@
   - [[#undo][Undo]]
 - [[#appearance][Appearance]]
   - [[#set-theme][Set Theme]]
-  - [[#automatic-modus-themes][Automatic Modus themes]]
   - [[#transparency][Transparency]]
   - [[#doom-modeline][Doom Modeline]]
   - [[#nerd-icons][Nerd Icons]]
@@ -66,7 +64,11 @@
 - [[#browsing][Browsing]]
   - [[#shr-rendering][Shr Rendering]]
   - [[#eww-keybindings-and-helpers][EWW Keybindings and Helpers]]
+  - [[#duckduckgo-and-search][DuckDuckGo and Search]]
   - [[#url-routing--external-programs][URL Routing & External Programs]]
+- [[#communication][Communication]]
+  - [[#erc-irc][ERC (IRC)]]
+  - [[#elfeed-rss][Elfeed (RSS)]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -262,316 +264,348 @@ automatically exports the configuration here to the associated output files.
 #+end_src
 
 ** Network reliability
-EWW and package.el retrieve URLs through the same layers:
-url-retrieve → GnuTLS → TCP, and url.el's DNS lookups are synchronous.
-When one layer stalls, EWW hangs on "Loading ..." forever and
-package-refresh-contents hangs on "Contacting host: melpa.org" — one
-root cause, two symptoms.  C-g recovers because Emacs is waiting inside
-an interruptible process filter, not inside an unbreakable syscall.
+EWW and package.el retrieve URLs through the same layers: =url-retrieve= -> GnuTLS -> TCP,
+and url.el's DNS lookups are synchronous.  When one layer stalls, EWW hangs on
+"Loading <url>..." forever and =package-refresh-contents= hangs on "Contacting host:
+melpa.org" — one root cause, two symptoms.  C-g always recovers because Emacs is
+waiting inside a process filter (interruptible), not inside a blocking syscall.
 
-Emacs itself has no timeout for plain =url-retrieve=: if DNS or the TLS
-handshake stalls, the request never finishes, which is why "Loading ..."
-can stay on screen for hours.  The pieces below make every layer either
-bounded or external, and give you a diagnosis tool that cannot hang.
+Emacs itself has no timeout for plain =url-retrieve=: if DNS or the TLS handshake
+stalls, the request never finishes, which is why "Loading ..." can stay on screen
+for hours.  The pieces below make every layer either bounded or external (curl
+races IPv4/IPv6 and enforces its own deadlines in a subprocess), and give you a
+diagnosis tool that cannot hang.
 
+Usual suspects, in order of likelihood:
+1. *Stale proxy settings* left in the environment by a VPN/proxy client.
+   Check =M-: (list (getenv "https_proxy") (getenv "http_proxy"))= and
+   =C-h v url-proxy-services=.  If Emacs should not use a proxy at all:
+   =(setq url-proxy-services nil)=.
+2. *Broken IPv6*: Emacs dials the AAAA address first and waits out the OS timeout.
+   Compare in a shell: =curl -4 https://news.ycombinator.com= vs =curl -6 ...=;
+   if only -6 hangs, the IPv6 route is black-holed (fix on the OS/router side).
+3. *Stalled TLS handshake*: black-holed MTU on PPPoE/VPN links, or the historical
+   GnuTLS 3.6 TLS 1.3 hang (Emacs bug#34293).
+4. *A hidden NSM prompt*: the Network Security Manager can be waiting on a
+   minibuffer question about a certificate — check the minibuffer/echo area.
+
+When something hangs, run =M-x my/net-doctor=: six curl subprocess probes (forced
+IPv4/IPv6, MELPA, GNU ELPA, NonGNU ELPA, DuckDuckGo) plus one asynchronous url.el
+probe, each with its own deadline, so the doctor can never freeze Emacs.
 #+begin_src emacs-lisp
-;; Debugging aids — leave commented out until needed:
-;; (setq url-debug t)          ; log every url.el step to *URL-DEBUG*
-;; (setq gnutls-log-level 2)   ; log the TLS handshake to *Messages*
-(require 'subr-x) ; string-trim, used by the doctor below
-;; EWW fetches page images through a work queue; make stuck image
-;; fetches give up instead of piling up on a flaky connection.
-(setq url-queue-timeout 10)
-;; Fix for permanent "Contacting host" hangs with GnuTLS 3.6.x
-;; (Emacs bug#34293): stop offering TLS 1.3.  Only enable this if
-;; my/net-doctor shows TLS connections timing out while curl succeeds.
-;; (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3")
-;; Don't let a manual M-x package-refresh-contents hang forever either:
-;; give the archive download two minutes, then report.
-(define-advice package-refresh-contents
-    (:around (orig-fn &rest args) my/refresh-timeout)
-  "Give up after two minutes instead of hanging on a stalled network."
-  (condition-case err
-      (with-timeout (120) (apply orig-fn args))
-    ((error timeout)
-     (message "package-refresh-contents aborted: %s; network looks broken, try M-x my/net-doctor"
-              (error-message-string err))
-     nil)))
+    ;; Debugging aids — leave commented out until needed:
+    ;; (setq url-debug t)          ; log every url.el step to *URL-DEBUG*
+    ;; (setq gnutls-log-level 2)   ; log the TLS handshake to *Messages*
+    (require 'subr-x) ; string-trim, used by the doctor below
+    ;; EWW fetches page images through a work queue; make stuck image
+    ;; fetches give up instead of piling up on a flaky connection.
+    (setq url-queue-timeout 10)
+    ;; Fix for permanent "Contacting host" hangs with GnuTLS 3.6.x
+    ;; (Emacs bug#34293): stop offering TLS 1.3.  Only enable this if
+    ;; my/net-doctor shows TLS connections timing out while curl succeeds.
+    ;; (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3")
+    ;; Don't let a manual M-x package-refresh-contents hang forever either:
+    ;; give the archive download two minutes, then report.
+    (define-advice package-refresh-contents
+        (:around (orig-fn &rest args) my/refresh-timeout)
+      "Give up after two minutes instead of hanging on a stalled network."
+      (condition-case err
+          (with-timeout (120) (apply orig-fn args))
+        ((error timeout)
+         (message "package-refresh-contents aborted: %s; network looks broken, try M-x my/net-doctor"
+                  (error-message-string err))
+         nil)))
 
-;; ---------------------------------------------------------------------------
-;; my/net-doctor v2 — external-process probes; can never freeze Emacs.
-;; (The old with-timeout version could not work: timers cannot preempt
-;; C-level DNS/connect calls.  v2 probes with curl subprocesses, each with
-;; its own deadlines, plus one deferred async url-retrieve probe.)
-;; ---------------------------------------------------------------------------
+    ;; ---------------------------------------------------------------------------
+    ;; my/net-doctor v3 — external-process probes; can never freeze Emacs.
+    ;; ---------------------------------------------------------------------------
+    (defvar my/net-doctor-probe-timeout 15
+      "Seconds after which curl gives up on a single probe.")
 
-(defvar my/net-doctor-probe-timeout 15
-  "Seconds after which curl gives up on a single probe.")
+    (defvar my/net-doctor-url-probe-timeout 15
+      "Seconds after which the Emacs url.el probe is killed.")
 
-(defvar my/net-doctor-url-probe-timeout 15
-  "Seconds after which the Emacs url.el probe is killed.")
+    (defvar my/net-doctor--curl-exit-messages
+      '((1 . "unsupported protocol")
+        (2 . "bad curl command line (often an empty/blank URL argument)")
+        (3 . "malformed URL (raw space/newline/control char, or [range] without -g)")
+        (5 . "couldn't resolve PROXY (stale proxy env?)")
+        (6 . "couldn't resolve host - DNS broken")
+        (7 . "couldn't connect - TCP refused/unreachable")
+        (22 . "HTTP 4xx/5xx response")
+        (28 . "timeout - connection stalled (often TLS/MTU blackhole)")
+        (35 . "TLS handshake error")
+        (47 . "too many redirects (often a cookie-hungry site)")
+        (52 . "empty reply from server")
+        (60 . "TLS certificate verification failed"))
+      "Human-readable meanings of the curl exit codes the doctor can hit.")
 
-(defvar my/net-doctor--curl-exit-messages
-  '((1 . "unsupported protocol")
-    (3 . "malformed URL")
-    (5 . "couldn't resolve PROXY (stale proxy env?)")
-    (6 . "couldn't resolve host - DNS broken")
-    (7 . "couldn't connect - TCP refused/unreachable")
-    (22 . "HTTP 4xx/5xx response")
-    (28 . "timeout - connection stalled (often TLS/MTU blackhole)")
-    (35 . "TLS handshake error")
-    (47 . "too many redirects")
-    (52 . "empty reply from server")
-    (60 . "TLS certificate verification failed"))
-  "Human-readable meanings of the curl exit codes the doctor can hit.")
+    (defvar my/net-doctor-curl-probes
+      (list
+       (list "IPv4  news.ycombinator.com"
+             (list "-4" "-sS" "-o" "/dev/null" ; Windows: replace with nul
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://news.ycombinator.com"))
+       (list "IPv6  news.ycombinator.com"
+             (list "-6" "-sS" "-o" "/dev/null"
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://news.ycombinator.com"))
+       (list "MELPA melpa.org"
+             (list "-sS" "-o" "/dev/null"
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://melpa.org/packages/"))
+       (list "GNU ELPA elpa.gnu.org"
+             (list "-sS" "-o" "/dev/null"
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://elpa.gnu.org/packages/"))
+       (list "nongnu elpa.nongnu.org"
+             (list "-sS" "-o" "/dev/null"
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://elpa.nongnu.org/nongnu/"))
+       ;; Probing the exact endpoint EWW searches on (Emacs 31 default
+       ;; `eww-search-prefix').  http=202 means DDG served its anti-bot
+       ;; challenge to this client — site-side judgement about UA/IP
+       ;; reputation, NOT a network failure.
+       (list "DuckDuckGo html endpoint"
+             (list "-sS" "-o" "/dev/null"
+                   "--connect-timeout" "8"
+                   "-m" (number-to-string my/net-doctor-probe-timeout)
+                   "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
+                   "https://html.duckduckgo.com/html/?q=emacs")))
+      "curl probes run by `my/net-doctor'; each entry is (LABEL (curl ARGS...)).")
 
-(defvar my/net-doctor-curl-probes
-  (list
-   (list "IPv4  news.ycombinator.com"
-         (list "-4" "-sS" "-o" "/dev/null" ; Windows: replace with nul
-               "--connect-timeout" "8"
-               "-m" (number-to-string my/net-doctor-probe-timeout)
-               "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
-               "https://news.ycombinator.com"))
-   (list "IPv6  news.ycombinator.com"
-         (list "-6" "-sS" "-o" "/dev/null"
-               "--connect-timeout" "8"
-               "-m" (number-to-string my/net-doctor-probe-timeout)
-               "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
-               "https://news.ycombinator.com"))
-   (list "MELPA melpa.org"
-         (list "-sS" "-o" "/dev/null"
-               "--connect-timeout" "8"
-               "-m" (number-to-string my/net-doctor-probe-timeout)
-               "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
-               "https://melpa.org/packages/"))
-   (list "GNU ELPA elpa.gnu.org"
-         (list "-sS" "-o" "/dev/null"
-               "--connect-timeout" "8"
-               "-m" (number-to-string my/net-doctor-probe-timeout)
-               "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
-               "https://elpa.gnu.org/packages/"))
-   (list "nongnu elpa.nongnu.org"
-         (list "-sS" "-o" "/dev/null"
-               "--connect-timeout" "8"
-               "-m" (number-to-string my/net-doctor-probe-timeout)
-               "-w" "remote_ip=%{remote_ip} http=%{http_code} total=%{time_total}s"
-               "https://elpa.nongnu.org/nongnu/")))
-  "curl probes run by `my/net-doctor'; each entry is (LABEL (curl ARGS...)).")
+    (defun my/net-doctor--curl-exit (code)
+      "Describe curl exit code CODE using `my/net-doctor--curl-exit-messages'."
+      (cond
+       ((< code 0) (format "killed by signal %s" (- code)))
+       (t (or (cdr (assq code my/net-doctor--curl-exit-messages))
+              (format "exit %s" code)))))
 
-(defun my/net-doctor--curl-exit (code)
-  "Describe curl exit code CODE using `my/net-doctor--curl-exit-messages'."
-  (cond
-   ((< code 0) (format "killed by signal %s" (- code)))
-   (t (or (cdr (assq code my/net-doctor--curl-exit-messages))
-          (format "exit %s" code)))))
+    (defun my/net-doctor--report (buffer label status &optional detail)
+      "Append one report line for LABEL and STATUS to BUFFER."
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert (format "%-30s %-44s %s\n" label status (or detail "")))
+            (let ((win (get-buffer-window buffer t)))
+              (when win (set-window-point win (point-max))))))))
 
-(defun my/net-doctor--report (buffer label status &optional detail)
-  "Append one report line for LABEL and STATUS to BUFFER."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (format "%-30s %-44s %s\n" label status (or detail "")))
-        (let ((win (get-buffer-window buffer t)))
-          (when win (set-window-point win (point-max))))))))
+    (defun my/net-doctor--run-curl (report-buffer label args)
+      "Run one curl probe with ARGS; report to REPORT-BUFFER when it finishes."
+      (condition-case err
+          (let ((pbuf (generate-new-buffer " *net-doctor probe*"))
+                (errbuf (generate-new-buffer " *net-doctor stderr*")))
+            (make-process
+             :name (concat "net-doctor-"
+                           (replace-regexp-in-string "[^A-Za-z0-9]+" "-" label))
+             :buffer pbuf
+             :stderr errbuf
+             :command (append (list "curl") args)
+             :sentinel
+             (lambda (proc _event)
+               (unless (process-live-p proc)
+                 (let* ((out (and (buffer-live-p pbuf)
+                                  (with-current-buffer pbuf (buffer-string))))
+                        (errs (and (buffer-live-p errbuf)
+                                   (string-trim
+                                    (with-current-buffer errbuf (buffer-string)))))
+                        (code (process-exit-status proc)))
+                   (when (buffer-live-p pbuf)
+                     (kill-buffer pbuf))
+                   (when (buffer-live-p errbuf)
+                     (kill-buffer errbuf))
+                   (my/net-doctor--report
+                    report-buffer label
+                    (if (zerop code)
+                        "ok"
+                      (concat "FAILED - " (my/net-doctor--curl-exit code)))
+                    (or (and (not (zerop code))
+                             (not (string= errs ""))
+                             errs)
+                        out)))))))
+        (error
+         (my/net-doctor--report report-buffer label "FAILED"
+                                (error-message-string err)))))
 
-(defun my/net-doctor--run-curl (report-buffer label args)
-  "Run one curl probe with ARGS; report to REPORT-BUFFER when it finishes."
-  (condition-case err
-      (let ((pbuf (generate-new-buffer " *net-doctor probe*"))
-            (errbuf (generate-new-buffer " *net-doctor stderr*")))
-        (make-process
-         :name (concat "net-doctor-"
-                       (replace-regexp-in-string "[^A-Za-z0-9]+" "-" label))
-         :buffer pbuf
-         :stderr errbuf
-         :command (append (list "curl") args)
-         :sentinel
-         (lambda (proc _event)
-           (unless (process-live-p proc)
-             (let* ((out (and (buffer-live-p pbuf)
-                              (with-current-buffer pbuf (buffer-string))))
-                    (errs (and (buffer-live-p errbuf)
-                               (string-trim
-                                (with-current-buffer errbuf (buffer-string)))))
-                    (code (process-exit-status proc)))
-               (when (buffer-live-p pbuf)
-                 (kill-buffer pbuf))
-               (when (buffer-live-p errbuf)
-                 (kill-buffer errbuf))
-               (my/net-doctor--report
-                report-buffer label
-                (if (zerop code)
-                    "ok"
-                  (concat "FAILED - " (my/net-doctor--curl-exit code)))
-                (or (and (not (zerop code))
-                         (not (string= errs ""))
-                         errs)
-                    out)))))))
-    (error
-     (my/net-doctor--report report-buffer label "FAILED"
-                            (error-message-string err)))))
+    (defun my/net-doctor--url-probe (report-buffer)
+      "Deferred, asynchronous url.el probe used by `my/net-doctor'."
+      (let* ((done (list nil))
+             timer proc buf)
+        (my/net-doctor--report report-buffer "url.el" "dialing..."
+                               "synchronous DNS in Emacs may freeze it briefly; that freeze IS the finding (C-g cancels)")
+        (condition-case err
+            (progn
+              (setq buf
+                    (url-retrieve
+                     "https://news.ycombinator.com"
+                     (lambda (status &rest _)
+                       (unless (car done)
+                         (setcar done t)
+                         (when (timerp timer)
+                           (cancel-timer timer))
+                         (let ((err (plist-get status :error)))
+                           (my/net-doctor--report
+                            report-buffer "url.el"
+                            (if err "FAILED" "ok")
+                            (if err
+                                (format "%S - Emacs-side problem (NSM prompt/proxy/GnuTLS)" err)
+                              "HTTP response received; Emacs networking works")))
+                       (ignore-errors (kill-buffer (current-buffer)))))
+                     nil t))
+              (setq proc (and (bufferp buf) (get-buffer-process buf)))
+              (setq timer
+                    (run-at-time my/net-doctor-url-probe-timeout nil
+                                 (lambda ()
+                                   (unless (car done)
+                                     (setcar done t)
+                                     (when (and proc (process-live-p proc))
+                                       (delete-process proc))
+                                     (my/net-doctor--report
+                                      report-buffer "url.el" "HANG - killed"
+                                      (format "no response in %ss while curl reached the site: Emacs-side problem (NSM prompt, proxy vars, GnuTLS)"
+                                              my/net-doctor-url-probe-timeout))))))
+              (unless proc
+                (unless (car done)
+                  (setcar done t)
+                  (when (timerp timer)
+                    (cancel-timer timer))
+                  (my/net-doctor--report report-buffer "url.el" "FAILED"
+                                         "no process was started"))))
+          (quit
+           (unless (car done)
+             (setcar done t)
+             (when (timerp timer)
+               (cancel-timer timer))
+             (my/net-doctor--report report-buffer "url.el" "interrupted"
+                                    "C-g stopped the dial - needing C-g here means Emacs DNS hangs (compare the curl lines)")))
+          (error
+           (unless (car done)
+             (setcar done t)
+             (when (timerp timer)
+               (cancel-timer timer))
+             (my/net-doctor--report report-buffer "url.el" "FAILED"
+                                    (error-message-string err)))))))
 
-(defun my/net-doctor--url-probe (report-buffer)
-  "Deferred, asynchronous url.el probe used by `my/net-doctor'."
-  (let* ((done (list nil))
-         timer proc buf)
-    (my/net-doctor--report report-buffer "url.el" "dialing..."
-                           "synchronous DNS in Emacs may freeze it briefly; that freeze IS the finding (C-g cancels)")
-    (condition-case err
-        (progn
-          (setq buf
-                (url-retrieve
-                 "https://news.ycombinator.com"
-                 (lambda (status &rest _)
-                   (unless (car done)
-                     (setcar done t)
-                     (when (timerp timer)
-                       (cancel-timer timer))
-                     (let ((err (plist-get status :error)))
-                       (my/net-doctor--report
-                        report-buffer "url.el"
-                        (if err "FAILED" "ok")
-                        (if err
-                            (format "%S - Emacs-side problem (NSM prompt/proxy/GnuTLS)" err)
-                          "HTTP response received; Emacs networking works")))
-                   (ignore-errors (kill-buffer (current-buffer)))))
-                 nil t))
-          (setq proc (and (bufferp buf) (get-buffer-process buf)))
-          (setq timer
-                (run-at-time my/net-doctor-url-probe-timeout nil
-                             (lambda ()
-                               (unless (car done)
-                                 (setcar done t)
-                                 (when (and proc (process-live-p proc))
-                                   (delete-process proc))
-                                 (my/net-doctor--report
-                                  report-buffer "url.el" "HANG - killed"
-                                  (format "no response in %ss while curl reached the site: Emacs-side problem (NSM prompt, proxy vars, GnuTLS)"
-                                          my/net-doctor-url-probe-timeout))))))
-          (unless proc
-            (unless (car done)
-              (setcar done t)
-              (when (timerp timer)
-                (cancel-timer timer))
-              (my/net-doctor--report report-buffer "url.el" "FAILED"
-                                     "no process was started"))))
-      (quit
-       (unless (car done)
-         (setcar done t)
-         (when (timerp timer)
-           (cancel-timer timer))
-         (my/net-doctor--report report-buffer "url.el" "interrupted"
-                                "C-g stopped the dial - needing C-g here means Emacs DNS hangs (compare the curl lines)")))
-      (error
-       (unless (car done)
-         (setcar done t)
-         (when (timerp timer)
-           (cancel-timer timer))
-         (my/net-doctor--report report-buffer "url.el" "FAILED"
-                                (error-message-string err)))))))
+    (defun my/net-doctor (&optional skip-url-probe)
+      "Probe the network layers EWW and package.el depend on.
+    Never blocks Emacs: every probe is either a `curl' subprocess with its
+    own deadlines or an asynchronous `url-retrieve'.  No C-g required.
 
-(defun my/net-doctor (&optional skip-url-probe)
-  "Probe the network layers EWW and package.el depend on.
-Never blocks Emacs: every probe is either a `curl' subprocess with its
-own deadlines or an asynchronous `url-retrieve'.  No C-g required.
+    With prefix arg SKIP-URL-PROBE, skip the url.el probe - the only probe
+    that can briefly freeze Emacs while its DNS lookup runs (that freeze,
+    with the curl probes ok, is itself the diagnosis).
 
-With prefix arg SKIP-URL-PROBE, skip the url.el probe - the only probe
-that can briefly freeze Emacs while its DNS lookup runs (that freeze,
-with the curl probes ok, is itself the diagnosis).
+    Interpreting the report:
+      curl IPv4 FAILED        -> OS-level DNS or routing; fix outside Emacs.
+      only curl IPv6 FAILED   -> black-holed IPv6; Emacs dials the AAAA
+                                 address first and waits out the OS timeout.
+                                 Fix at the OS/router level.
+      curl all ok, url.el HANG or FAILED -> Emacs-side: stale proxy env vars
+                                 (`url-proxy-services'), a hidden NSM
+                                 certificate prompt, or GnuTLS (try the
+                                 NORMAL:-VERS-TLS1.3 workaround noted above).
+      DuckDuckGo http=202     -> DDG served its anti-bot challenge to this
+                                 client (UA/IP reputation), NOT a network
+                                 failure; see `my/eww-curl-user-agent'.
+      everything ok           -> the site was slow or a one-off; retry
+                                 (g in EWW, M-x package-refresh-contents)."
+      (interactive "P")
+      (require 'url-queue)
+      (let ((buf (get-buffer-create "*net-doctor*")))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert "Emacs network doctor (v3) - " (current-time-string) "\n"
+                    (format "Emacs %s on %s, GnuTLS: %s\n"
+                            emacs-version system-type
+                            (if (and (fboundp 'gnutls-available-p)
+                                     (gnutls-available-p))
+                                "yes" "NO - https cannot work at all"))
+                    (format "proxy env: %s | url-proxy-services: %s | network-security-level: %s\n\n"
+                            (or (getenv "https_proxy") (getenv "HTTPS_PROXY")
+                                (getenv "http_proxy") (getenv "HTTP_PROXY")
+                                "none")
+                            (if (boundp 'url-proxy-services)
+                                (format "%S" url-proxy-services)
+                              "not loaded yet")
+                            (if (boundp 'network-security-level)
+                                network-security-level
+                              "?")))
+            (special-mode)))
+        (dolist (probe my/net-doctor-curl-probes)
+          (my/net-doctor--run-curl buf (car probe) (cadr probe)))
+        (if skip-url-probe
+            (my/net-doctor--report buf "url.el" "skipped"
+                                   "prefix arg given; rerun without it for the full picture")
+          (my/net-doctor--report buf "url.el" "queued"
+                                 "starts in 3s; may freeze Emacs briefly while dialing - that freeze is a finding")
+          (run-at-time 3 nil #'my/net-doctor--url-probe buf))
+        (pop-to-buffer buf)))
 
-Interpreting the report:
-  curl IPv4 FAILED        -> OS-level DNS or routing; fix outside Emacs.
-  only curl IPv6 FAILED   -> black-holed IPv6; Emacs dials the AAAA
-                             address first and waits out the OS timeout.
-                             Fix at the OS/router level.
-  curl all ok, url.el HANG or FAILED -> Emacs-side: stale proxy env vars
-                             (`url-proxy-services'), a hidden NSM
-                             certificate prompt, or GnuTLS (try the
-                             NORMAL:-VERS-TLS1.3 workaround noted above).
-  everything ok           -> the site was slow or a one-off; retry
-                             (g in EWW, M-x package-refresh-contents)."
-  (interactive "P")
-  (require 'url-queue)
-  (let ((buf (get-buffer-create "*net-doctor*")))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert "Emacs network doctor (v2) - " (current-time-string) "\n"
-                (format "Emacs %s on %s, GnuTLS: %s\n"
-                        emacs-version system-type
-                        (if (and (fboundp 'gnutls-available-p)
-                                 (gnutls-available-p))
-                            "yes" "NO - https cannot work at all"))
-                (format "proxy env: %s | url-proxy-services: %s | network-security-level: %s\n\n"
-                        (or (getenv "https_proxy") (getenv "HTTPS_PROXY")
-                            (getenv "http_proxy") (getenv "HTTP_PROXY")
-                            "none")
-                        (if (boundp 'url-proxy-services)
-                            (format "%S" url-proxy-services)
-                          "not loaded yet")
-                        (if (boundp 'network-security-level)
-                            network-security-level
-                          "?")))
-        (special-mode)))
-    (dolist (probe my/net-doctor-curl-probes)
-      (my/net-doctor--run-curl buf (car probe) (cadr probe)))
-    (if skip-url-probe
-        (my/net-doctor--report buf "url.el" "skipped"
-                               "prefix arg given; rerun without it for the full picture")
-      (my/net-doctor--report buf "url.el" "queued"
-                             "starts in 3s; may freeze Emacs briefly while dialing - that freeze is a finding")
-      (run-at-time 3 nil #'my/net-doctor--url-probe buf))
-    (pop-to-buffer buf)))
+    ;; ---------------------------------------------------------------------------
+    ;; my/net-nuke - the "unstick" command
+    ;; ---------------------------------------------------------------------------
 
-;; ---------------------------------------------------------------------------
-;; my/net-nuke - the "unstick" command
-;; ---------------------------------------------------------------------------
-
-(defun my/net-nuke ()
-  "Delete stuck url.el network processes and clear the download queue.
-Run this right after C-g freed Emacs from a \"Contacting host ...\" or
-\"Loading ...\" freeze: killing the stalled connections lets their error
-callbacks fire, so EWW buffers stop showing \"Loading\" forever.
-Only url.el's own \" *http\" buffers and this config's leftover \"nd-\"
-probes are touched - LSP servers, IRC, etc. are left alone."
-  (interactive)
-  (require 'url-queue)
-  (let (killed)
-    (dolist (proc (process-list))
-      (let ((buf (process-buffer proc)))
-        (when (and (eq (process-type proc) 'network)
-                   (or (string-match-p "\\`nd-" (process-name proc))
-                       (and (buffer-live-p buf)
-                            (string-match-p "\\` \\*http" (buffer-name buf)))))
-          (push (process-name proc) killed)
-          (ignore-errors (delete-process proc)))))
-    ;; Drop queued fetch jobs; url-queue.el has no public cleaner.
-    (setq url-queue nil)
-    (when (timerp url-queue-progress-timer)
-      (cancel-timer url-queue-progress-timer)
-      (setq url-queue-progress-timer nil))
-    (if killed
-        (message "my/net-nuke: killed %d stuck network process(es): %s"
-                 (length killed)
-                 (mapconcat #'identity (nreverse killed) ", "))
-      (message "my/net-nuke: no stuck network processes; queue cleared"))))
+    (defun my/net-nuke ()
+      "Delete stuck url.el network processes and clear the download queue.
+    Run this right after C-g freed Emacs from a \"Contacting host ...\" or
+    \"Loading ...\" freeze: killing the stalled connections lets their error
+    callbacks fire, so EWW buffers stop showing \"Loading\" forever.
+    Only url.el's own \" *http\" buffers and this config's leftover \"nd-\"
+    probes are touched - LSP servers, IRC, etc. are left alone."
+      (interactive)
+      (require 'url-queue)
+      (let (killed)
+        (dolist (proc (process-list))
+          (let ((buf (process-buffer proc)))
+            (when (and (eq (process-type proc) 'network)
+                       (or (string-match-p "\\`nd-" (process-name proc))
+                           (and (buffer-live-p buf)
+                                (string-match-p "\\` \\*http" (buffer-name buf)))))
+              (push (process-name proc) killed)
+              (ignore-errors (delete-process proc)))))
+        ;; Drop queued fetch jobs; url-queue.el has no public cleaner.
+        (setq url-queue nil)
+        (when (timerp url-queue-progress-timer)
+          (cancel-timer url-queue-progress-timer)
+          (setq url-queue-progress-timer nil))
+        (if killed
+            (message "my/net-nuke: killed %d stuck network process(es): %s"
+                     (length killed)
+                     (mapconcat #'identity (nreverse killed) ", "))
+          (message "my/net-nuke: no stuck network processes; queue cleared"))))
 #+end_src
 
-** When Emacs is stuck — the runbook
-
-1. =C-g= (press twice if needed).  Emacs is waiting inside an
-   interruptible process filter, so this always comes back.
-2. =M-x my/net-nuke= — kills the stalled " *http" connections so buffers
-   stuck on "Loading ..." render an error page instead of hanging on.
-3. =M-x my/net-doctor= — five curl probes and one url.el probe; read the
-   matrix in the buffer (also in the docstring of =my/net-doctor=).
-4. Fix what it names (DNS/IPv6 → OS side; proxy vars → =url-proxy-services=;
-   TLS → the =gnutls-algorithm-priority= line above; certificate question
-   in the minibuffer → NSM was waiting for you).
-5. Retry: =g= in the EWW buffer, or =M-x package-refresh-contents=
-   (now bounded by the advice above), then =M-x package-install=.
+*** When Emacs is stuck — the runbook
+1. =C-g= (press twice if needed).  Emacs is waiting inside an interruptible
+   process filter, so this always comes back.
+2. =M-x my/net-nuke= — kills the stalled " *http" connections so buffers stuck
+   on "Loading ..." finish with an error instead of pretending to load forever.
+3. =M-x my/net-doctor= — read the report matrix (also in its docstring):
+   curl IPv4 FAILED -> OS-level DNS or routing; only curl IPv6 FAILED ->
+   black-holed IPv6 (Emacs dials the AAAA address first); curl all ok but
+   url.el HANG/FAILED -> Emacs-side trouble (stale proxy vars, a hidden NSM
+   prompt, GnuTLS).
+4. Fix what it names (DNS/IPv6 -> OS side; proxy vars -> =url-proxy-services=;
+   TLS -> the =gnutls-algorithm-priority= line above; DuckDuckGo http=202 -> the
+   [[*DuckDuckGo and Search][DuckDuckGo and Search]] section below; a
+   certificate question sitting in the minibuffer -> NSM was waiting for you).
+5. For any page-level failure the EWW error page carries the diagnosis itself:
+   the exact URL handed to curl, curl's own message, the exit-code meaning and
+   a code-specific hint.
+6. Retry: =g= in the EWW buffer, or =M-x package-refresh-contents= (bounded by
+   the advice above), then =M-x package-install=.
 
 ** Package manager
 We use the default built in package manager package.el.
@@ -1033,7 +1067,7 @@ Set fonts in the early-init.el file
 ** Set Theme
 A megapack of themes for GNU Emacs.
 Use consult-theme to easily try out themes (*Epilepsy* Warning).
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp
     (use-package doom-themes
       :custom
       ;; Global settings (defaults)
@@ -1045,21 +1079,9 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
       (doom-themes-org-config))
 #+end_src
 
-** Automatic Modus themes
-Set light/dark modus theme according to the OS appearance setting
-#+begin_src emacs-lisp
-    (use-package auto-dark
-      :ensure t
-      :custom
-      ;; order is (dark) (light)
-      (auto-dark-themes '((modus-vivendi) (modus-operandi)))
-      :config
-      (auto-dark-mode 1))
-#+end_src
-
 ** Transparency
 With Emacs version 29, true transparency has been added.
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp
     (add-to-list 'default-frame-alist '(alpha-background . 100)) ; For all new frames henceforth
 
     ;; Transparency in terminal
@@ -1963,71 +1985,9 @@ Shr is the HTML renderer behind EWW; keep pages monospaced and narrow.
 
 ** EWW Keybindings and Helpers
 #+begin_src emacs-lisp
-    ;; Fetch page HTML with curl instead of url.el (Emacs 28+).  curl
-    ;; races IPv4/IPv6 and enforces its own timeouts, so a broken
-    ;; network can slow pages but never freeze Emacs, and a stuck
-    ;; "Loading ..." can no longer last forever (hard 20 s cap).
-    ;; Inline images still go through url-queue, bounded by
-    ;; `url-queue-timeout' above.
-    (setq eww-retrieve-command '("curl" "-sS" "-L" "-m" "20"))
-
-    ;; Render a visible error page when a fetch fails, instead of the
-    ;; stock silent blank buffer.
-    (defun my/eww-retrieve-with-error-page (orig-fn url callback cbargs)
-      "Around-advice for `eww-retrieve'.
-    When an external `eww-retrieve-command' is used, render a visible error
-    page when the fetch fails, instead of the stock silent blank page."
-      (if (not (consp eww-retrieve-command))
-          (funcall orig-fn url callback cbargs)
-        (let* ((buf (generate-new-buffer " *eww retrieve*"))
-               (errbuf (generate-new-buffer " *eww error*")))
-          (with-current-buffer buf
-            (set-buffer-multibyte nil))
-          (make-process
-           :name "*eww fetch*"
-           :buffer buf
-           :stderr errbuf
-           :command (append eww-retrieve-command (list url))
-           :sentinel
-           (lambda (proc _event)
-             (unless (process-live-p proc)
-               (when (buffer-live-p errbuf)
-                 (when (get-buffer-process errbuf)
-                   (delete-process (get-buffer-process errbuf)))
-                 (kill-buffer errbuf))
-               (when (buffer-live-p buf)
-                 (with-current-buffer buf
-                   (unless (zerop (process-exit-status proc))
-                     (erase-buffer)
-                     (insert "Fetch failed: curl exited with status "
-                             (number-to-string (process-exit-status proc))
-                             ".\n\nNetwork trouble?  Run M-x my/net-doctor, act on what it reports, then press g in the EWW buffer to retry."))
-                   (goto-char (point-min))
-                   (insert "Content-type: text/html; charset=utf-8\n\n")
-                   (apply callback nil cbargs)))))))))
-
-    (with-eval-after-load 'eww
-      (advice-add 'eww-retrieve :around #'my/eww-retrieve-with-error-page))
-
-    ;; Bounded downloads: unlike `url-copy-file' (synchronous, no
-    ;; timeout — hangs for minutes on a broken network), curl enforces
-    ;; its own DNS/connect/transfer deadlines.  Falls back to
-    ;; `url-copy-file' when curl is not installed.
-    (defun my/curl-download (url dest &optional timeout)
-      "Download URL to DEST with curl, bounded by TIMEOUT seconds (default 30)."
-      (if (not (executable-find "curl"))
-          (url-copy-file url dest t)
-        (let ((exit (call-process "curl" nil nil nil
-                                  "-sS" "-L" "-f"
-                                  "-m" (number-to-string (or timeout 30))
-                                  "-o" dest "--" url)))
-          (unless (zerop exit)
-            (ignore-errors (delete-file dest))
-            (error "Download failed (curl: %s): %s"
-                   (my/net-doctor--curl-exit exit) url))
-          dest)))
-
-    ;; Search prefix
+    ;; Search prefix: Josh Blais' SearX instance.  If searches hang or come
+    ;; back empty, switch to your own SearXNG or the stock DuckDuckGo:
+    ;; "https://duckduckgo.com/html/?q="
     (setq eww-search-prefix "https://duckduckgo.com/html/?q=")
 
     ;; Where `D' below and EWW's own download commands save files.
@@ -2046,9 +2006,283 @@ Shr is the HTML renderer behind EWW; keep pages monospaced and narrow.
       (define-key eww-mode-map (kbd "U") #'shr-copy-url) ; yank URL at point
       (define-key eww-mode-map (kbd "D") #'my/eww-download-image-at-point))
 
+    ;; ---- curl-backed EWW fetching, v3 ---------------------------------
+    ;; curl races IPv4/IPv6 (Happy Eyeballs), enforces its own
+    ;; deadlines and runs as a subprocess, so a broken network can slow
+    ;; pages but never freeze Emacs.  v3 adds: URL sanitizing (DDG's
+    ;; challenge form ships a raw space in its action URL -> curl exit
+    ;; 3), POST support (Emacs' eww-submit only feeds form data to
+    ;; url.el; the external-command path used to DROP it), a persistent
+    ;; cookie jar and -g/--globoff (curl was expanding [ ] { } in URLs
+    ;; as glob ranges).
+
+    (defcustom my/eww-curl-timeout 20
+      "Seconds curl may spend fetching one EWW page (its own deadline)."
+      :type 'integer)
+
+    (defcustom my/eww-curl-use-cookies t
+      "Let the curl fetcher keep a persistent cookie jar.
+Needed for logins and for flows like DuckDuckGo's anti-bot challenge,
+whose verification POST is tied to the session that received it.  The
+jar lives at `my/eww-curl-cookie-jar', next to url.el's own cookie
+file, with the same trust model."
+      :type 'boolean)
+
+    (defcustom my/eww-curl-cookie-jar
+      (expand-file-name "url/curl-cookies.txt" user-emacs-directory)
+      "Cookie jar file shared by all curl fetches (pages and downloads)."
+      :type 'file)
+
+    (defcustom my/eww-curl-user-agent nil
+      "User-Agent string for curl page fetches, or nil for curl's own.
+curl's default UA (\"curl/8.x\") is one of the reasons anti-bot
+systems (DuckDuckGo, Cloudflare, ...) challenge text browsers.
+Setting a conventional browser string makes far fewer sites show
+captchas; nil keeps curl's honest default.  See Patch 3."
+      :type '(choice (const :tag "curl default" nil) string))
+
+    (defun my/url-safe-for-curl (url)
+      "Percent-encode characters curl refuses outright in URL arguments.
+DuckDuckGo's anti-bot challenge page ships its form action with a raw,
+unencoded space inside the echoed query (...&q=two words&o=...), and
+curl exits with status 3 (\"URL rejected: Malformed input to a URL
+function\") on any URL containing a space, tab, CR or LF.  Browsers
+percent-encode those silently when submitting forms; so does this."
+      (replace-regexp-in-string "[[:cntrl:] ]"
+                                (lambda (ch)
+                                  (format "%%%02X" (aref ch 0)))
+                                url))
+
+    (defun my/curl--ensure-cookie-jar ()
+      "Create an empty cookie jar file if none exists yet.
+Avoids curl's \"failed to open cookie file\" warning on first use."
+      (unless (file-exists-p my/eww-curl-cookie-jar)
+        (make-directory (directory-file-name
+                         (file-name-directory my/eww-curl-cookie-jar))
+                        t)
+        (with-temp-file my/eww-curl-cookie-jar)))
+
+    (defun my/eww--html-escape (s)
+      "Escape S for safe inclusion in HTML text and attribute values."
+      (setq s (replace-regexp-in-string "&" "&amp;" s))
+      (setq s (replace-regexp-in-string "<" "&lt;" s))
+      (setq s (replace-regexp-in-string ">" "&gt;" s))
+      (setq s (replace-regexp-in-string "\"" "&quot;" s))
+      s)
+
+    (defvar my/eww--curl-exit-hints
+      '((3 . "The URL itself is malformed - usually a raw space or newline that the SITE's HTML shipped inside a link or form action (DuckDuckGo's anti-bot challenge form does exactly this with the echoed search query).  Browsers silently percent-encode such characters and this config now does too, so a repeat of exit 3 means something else in the page is broken: copy the URL shown above and inspect it.")
+        (5 . "curl tried to reach a PROXY and failed: stale http_proxy/https_proxy environment variables?")
+        (6 . "DNS could not resolve the host: resolver, VPN or /etc/hosts problem.  M-x my/net-doctor shows which layer.")
+        (7 . "TCP connect refused or unreachable: server down, firewall or VPN blocking.")
+        (22 . "The server answered with an HTTP 4xx/5xx status; whatever body it sent should be visible above or in the site's response.")
+        (28 . "Timed out.  Run M-x my/net-doctor: curl IPv4 ok but curl IPv6 failed = black-holed IPv6 network; url.el HANG while curl is ok = Emacs-side trouble (proxy vars, NSM prompt, GnuTLS).")
+        (35 . "TLS handshake failure.  If every curl probe in M-x my/net-doctor succeeds, compare Emacs' GnuTLS (see the NORMAL:-VERS-TLS1.3 note).")
+        (47 . "Redirect loop - typically the site insists on session cookies; the cookie jar should cover this.  If one site still loops, try M-x my/eww-toggle-fetch-backend once.")
+        (52 . "Server accepted the connection but sent an empty reply - often a bot-protection wall.")
+        (60 . "TLS certificate could not be verified: check the system clock and CA store."))
+      "Extra per-exit-code hints shown on the EWW curl error page.")
+
+    (defun my/eww--curl-error-page (url exit-code stderr)
+      "Build the diagnostic HTML page shown when curl exits with EXIT-CODE."
+      (let ((meaning (my/net-doctor--curl-exit exit-code))
+            (hint (cdr (assq exit-code my/eww--curl-exit-hints)))
+            (safe-url (my/eww--html-escape url))
+            (safe-err (my/eww--html-escape (string-trim (or stderr "")))))
+        (concat
+         "<!doctype html><html><head><title>Fetch failed: curl exit "
+         (number-to-string exit-code)
+         "</title></head><body>"
+         "<h1>Fetch failed: curl exited with status "
+         (number-to-string exit-code) "</h1>"
+         "<p><b>URL (as handed to curl):</b> <a href=\"" safe-url "\">"
+         safe-url "</a></p>"
+         "<p><b>What this status means:</b> " meaning ".</p>"
+         (when hint
+           (concat "<p><b>Hint:</b> " hint "</p>"))
+         (when (> (length safe-err) 0)
+           (concat "<p><b>curl's own message:</b></p><pre>" safe-err "</pre>"))
+         "<p><b>What now:</b> press <code>g</code> to retry this page, "
+         "<code>&amp;</code> to open it in your graphical browser, or run "
+         "<code>M-x my/net-doctor</code> to test every network layer.  If "
+         "one site keeps failing while the doctor is green, the site's "
+         "HTML or bot-protection is the problem - try "
+         "<code>M-x my/eww-toggle-fetch-backend</code> once for comparison."
+         "</p></body></html>")))
+
+    (defun my/eww--build-curl-command ()
+      "Build the curl argument list for `eww-retrieve-command'.
+-g/--globoff stops curl from treating [ ] { } in URLs as filename
+globbing ranges (a URL containing [0-9] would otherwise fetch a dozen
+wrong URLs instead of one); --compressed negotiates gzip;
+--connect-timeout 8 bounds the dial; -b/-c keep the persistent cookie
+jar so sessions and challenge flows survive between fetches."
+      (append
+       (list "curl" "-sS" "-g" "-L" "--compressed"
+             "--connect-timeout" "8"
+             "-m" (number-to-string my/eww-curl-timeout))
+       (when my/eww-curl-use-cookies
+         (list "-b" my/eww-curl-cookie-jar "-c" my/eww-curl-cookie-jar))
+       (when my/eww-curl-user-agent
+         (list "-A" my/eww-curl-user-agent))))
+
+    (defun my/eww--write-post-data (data)
+      "Write POST DATA to a temp file; curl reads it with --data-binary @FILE.
+A file (not the command line) is the right carrier: request bodies can
+be big and may contain bytes that cannot survive an argv array."
+      (let ((file (make-temp-file "eww-post-"))
+            (payload (if (multibyte-string-p data)
+                         (encode-coding-string data 'utf-8)
+                       data)))
+        (with-temp-file file
+          (set-buffer-multibyte nil)
+          (insert payload))
+        file))
+
+    (defun my/eww-retrieve-with-error-page (orig-fn url callback cbargs)
+      "Around-advice for `eww-retrieve' (v3).
+Replaces the stock external-command fetch with the same process wiring,
+plus:
+- URL sanitizing for curl (fixes curl exit 3 on URLs whose HTML shipped
+  raw spaces - DuckDuckGo's challenge form does exactly that);
+- HTTP POST support: `eww-submit' binds `url-request-method' and
+  `url-request-data' for url.el only; the stock external-command path
+  ignores them, so every form POST (login, captcha, search filters)
+  was silently turned into a bare GET of the action URL;
+- a persistent cookie jar;
+- a diagnostic error page carrying the URL, curl's stderr and the
+  exit-code meaning."
+      (if (not (and (boundp 'eww-retrieve-command)
+                    (consp eww-retrieve-command)))
+          (funcall orig-fn url callback cbargs)
+        (let* ((method (and (boundp 'url-request-method)
+                            (symbol-value 'url-request-method)))
+               (raw-data (and (boundp 'url-request-data)
+                              (symbol-value 'url-request-data)))
+               ;; Only ship a body for non-GET methods; url.el itself only
+               ;; sends `url-request-data' when the method says so.
+               (post-data (and raw-data
+                               (or (not method)
+                                   (not (equal method "GET")))
+                               raw-data))
+               (extra-headers (and (boundp 'url-request-extra-headers)
+                                   (symbol-value 'url-request-extra-headers)))
+               (fetch-url (my/url-safe-for-curl url))
+               (header-args nil)
+               (datafile (when post-data
+                           (my/eww--write-post-data post-data)))
+               (buf (generate-new-buffer " *eww retrieve*"))
+               (errbuf (generate-new-buffer " *eww error*")))
+          (when my/eww-curl-use-cookies
+            (my/curl--ensure-cookie-jar))
+          (with-current-buffer buf
+            (set-buffer-multibyte nil))
+          (dolist (h (or extra-headers '()))
+            (when (and (consp h) (stringp (car h)) (stringp (cdr h)))
+              (setq header-args
+                    (append header-args
+                            (list "-H" (concat (car h) ": " (cdr h)))))))
+          (condition-case err
+              (make-process
+               :name "*eww fetch*"
+               :buffer buf
+               :stderr errbuf
+               :command (append
+                         eww-retrieve-command
+                         header-args
+                         (when datafile
+                           (list "--data-binary" (concat "@" datafile)))
+                         (list fetch-url))
+               :sentinel
+               (lambda (process _event)
+                 (unless (process-live-p process)
+                   (let* ((exit (process-exit-status process))
+                          (stderr (and (buffer-live-p errbuf)
+                                       (string-trim
+                                        (with-current-buffer errbuf
+                                          (buffer-string))))))
+                     (when (buffer-live-p errbuf)
+                       (when (get-buffer-process errbuf)
+                         (delete-process (get-buffer-process errbuf)))
+                       (kill-buffer errbuf))
+                     (when datafile
+                       (ignore-errors (delete-file datafile)))
+                     (when (buffer-live-p buf)
+                       (with-current-buffer buf
+                         (unless (zerop exit)
+                           (message "my/eww: curl exit %s fetching %s%s"
+                                    exit fetch-url
+                                    (if (equal stderr "") ""
+                                      (concat " - " stderr)))
+                           (erase-buffer)
+                           (insert (encode-coding-string
+                                    (my/eww--curl-error-page fetch-url exit stderr)
+                                    'utf-8)))
+                         (goto-char (point-min))
+                         (insert "Content-type: text/html; charset=utf-8\n\n")
+                         (apply callback nil cbargs)))))))
+            (error
+             (when datafile
+               (ignore-errors (delete-file datafile)))
+             (ignore-errors (kill-buffer buf))
+             (ignore-errors (kill-buffer errbuf))
+             (signal (car err) (cdr err)))))))
+
+    (with-eval-after-load 'eww
+      (setq eww-retrieve-command (my/eww--build-curl-command))
+      (advice-add 'eww-retrieve :around #'my/eww-retrieve-with-error-page))
+
+    (defvar my/eww--curl-fetch-command nil
+      "curl argument list captured while the curl backend is active.")
+
+    (defun my/eww-toggle-fetch-backend ()
+      "Flip EWW between the curl subprocess fetcher and Emacs' built-in url.el.
+url.el understands NSM certificate prompts and proxies, but it has NO
+fetch timeout - the original \"Loading ...\" freezes are possible again
+while it is active.  Treat this as a one-off escape hatch for a site
+that misbehaves under curl, not as a mode."
+      (interactive)
+      (unless (boundp 'eww-retrieve-command)
+        (require 'eww))
+      (if (consp eww-retrieve-command)
+          (progn
+            (setq my/eww--curl-fetch-command eww-retrieve-command
+                  eww-retrieve-command nil)
+            (message "EWW fetch backend: url.el (built-in, NO fetch timeout - the old freezes are possible again)."))
+        (setq eww-retrieve-command
+              (or my/eww--curl-fetch-command (my/eww--build-curl-command)))
+        (message "EWW fetch backend: curl subprocess (bounded, cookie jar on).")))
+
+    ;; Bounded downloads: unlike `url-copy-file' (synchronous, no
+    ;; timeout — hangs for minutes on a broken network), curl enforces
+    ;; its own DNS/connect/transfer deadlines.  Shares the cookie jar
+    ;; with page fetches, so authenticated downloads keep working.
+    (defun my/curl-download (url dest &optional timeout)
+      "Download URL to DEST with curl, bounded by TIMEOUT seconds (default 30)."
+      (if (not (executable-find "curl"))
+          (url-copy-file url dest t)
+        (when my/eww-curl-use-cookies
+          (my/curl--ensure-cookie-jar))
+        (let ((exit (apply #'call-process "curl" nil nil nil
+                           (append
+                            (list "-sS" "-g" "-L" "-f"
+                                  "-m" (number-to-string (or timeout 30)))
+                            (when my/eww-curl-use-cookies
+                              (list "-b" my/eww-curl-cookie-jar
+                                    "-c" my/eww-curl-cookie-jar))
+                            (when my/eww-curl-user-agent
+                              (list "-A" my/eww-curl-user-agent))
+                            (list "-o" dest "--"
+                                  (my/url-safe-for-curl url))))))
+          (unless (zerop exit)
+            (ignore-errors (delete-file dest))
+            (error "Download failed (curl: %s): %s"
+                   (my/net-doctor--curl-exit exit) url))
+          dest)))
+
     (defun my/eww-download-image-at-point ()
       "Download the image at point to `eww-download-directory'.
-    Uses `my/curl-download' (20 s deadline) instead of `url-copy-file'."
+Uses `my/curl-download' (20 s deadline) instead of `url-copy-file'."
       (interactive)
       (let ((url (or (get-text-property (point) 'image-url)
                      (get-text-property (point) 'shr-url))))
@@ -2067,12 +2301,46 @@ Shr is the HTML renderer behind EWW; keep pages monospaced and narrow.
             (message "Saved: %s" dest)))))
 #+end_src
 
+** DuckDuckGo and Search
+EWW already searches via the non-JS DuckDuckGo endpoint (=eww-search-prefix=
+in the previous section is set to exactly that), so no prefix change is
+needed for DDG.  When DuckDuckGo serves its anti-bot challenge
+("Unfortunately, bots use DuckDuckGo too..."), the cause is not networking —
+it is how the client presents itself (User-Agent, IP reputation, absent
+cookies).  Two levers:
+
+#+begin_src emacs-lisp
+    ;; Lever 1: stop advertising "curl/8.x".  Anti-bot systems weigh the
+    ;; User-Agent heavily; curl's default is a guaranteed challenge on
+    ;; many sites.  A conventional browser string makes DDG challenges
+    ;; rare.  (You decide the honesty trade-off.)
+    (setq my/eww-curl-user-agent
+          "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0")
+
+    ;; Lever 2 (only if DDG still challenges or loops): point EWW's
+    ;; search prefix at an endpoint/engine that tolerates text clients.
+    ;; Pick ONE; keep the others commented for quick testing.
+    ;; (setq eww-search-prefix "https://lite.duckduckgo.com/lite/?q=")
+    ;; (setq eww-search-prefix "https://www.mojeek.com/search?q=")   ; no-challenge policy
+    ;; (setq eww-search-prefix "https://search.marginalia.nu/search?query=")
+    ;; (setq eww-search-prefix "https://www.bing.com/search?q=")
+#+end_src
+
+Two honest caveats: even with cookies and a browser User-Agent, DuckDuckGo
+may still fingerprint the client and refuse the challenge answer — its puzzle
+POST is now well-formed (the curl fetcher ships it, tied to the cookie jar),
+but a site that insists on a real browser cannot be satisfied from EWW.  And
+the second lever exists because a VPN/datacenter IP changes the odds as much
+as any client setting does.
+
 ** URL Routing & External Programs
 Videos go to mpv, PDFs open inside Emacs, gopher/gemini go to elpher,
 local HyperSpec pages go to the dedicated =*clhs*= buffer (Lisp Languages
 section), and everything else opens in EWW.  This table only routes links
 opened through Emacs (=org-open-at-point=, package buttons, =M-x
-browse-url=); =M-x eww= is always EWW.
+browse-url=); =M-x eww= is always EWW.  There is no =.= catch-all in the
+table any more: EWW is instead the =browse-url-browser-function= fallback,
+which is what un-breaks =&= (open the current page in Firefox).
 
 #+begin_src emacs-lisp
     (defun my/browse-url-mpv (url &rest _args)
@@ -2084,9 +2352,9 @@ browse-url=); =M-x eww= is always EWW.
 
     (defun my/browse-url-pdf (url &rest _args)
       "Fetch a remote PDF and open it inside Emacs.
-    Uses pdf-tools when installed, built-in doc-view otherwise.
-    Downloads via `my/curl-download' (60 s deadline), not `url-copy-file',
-    which hangs on the broken networks that got you here."
+Uses pdf-tools when installed, built-in doc-view otherwise.
+Downloads via `my/curl-download' (60 s deadline), not `url-copy-file',
+which hangs on the broken networks that got you here."
       (let ((tmp (make-temp-file "emacs-pdf-" nil ".pdf")))
         (my/curl-download url tmp 60)
         (find-file-other-window tmp)
@@ -2105,7 +2373,14 @@ browse-url=); =M-x eww= is always EWW.
       :ensure t
       :mode ("\\.pdf\\'" . pdf-view-mode))
 
-    ;; First matching regexp wins; "." makes EWW the default browser.
+    ;; First matching regexp wins.  Do NOT put a "." catch-all in this
+    ;; table: `browse-url' consults `browse-url-handlers' BEFORE falling
+    ;; back to `browse-url-browser-function', so a catch-all hijacks every
+    ;; path that tries to leave EWW through `browse-url' — including `&'
+    ;; in EWW, which binds `browse-url-browser-function' to the secondary
+    ;; browser and calls `browse-url'.  The old catch-all sent every such
+    ;; request straight back to EWW: that was the "& does not open
+    ;; Firefox" bug.
     (setq browse-url-handlers
           `(("\\(youtube\\.com\\|youtu\\.be\\|vimeo\\.com\\|twitch\\.tv\\)" . my/browse-url-mpv)
             ("\\.mp4$" . my/browse-url-mpv)
@@ -2113,10 +2388,197 @@ browse-url=); =M-x eww= is always EWW.
             ("^gemini://" . elpher-browse-url-elpher)
             ("^gopher://" . elpher-browse-url-elpher)
             (,(concat "^file://" (regexp-quote (expand-file-name "quicklisp/" "~")))
-             . my/eww-browse-clhs)
-            ("." . eww-browse-url)))
+             . my/eww-browse-clhs)))
+
+    ;; EWW is the default browser: this is the fallback `browse-url' uses
+    ;; when NO handler above matched.  Same net effect as the old
+    ;; catch-all, but on the right knob.
+    (setq browse-url-browser-function #'eww-browse-url)
 
     ;; Where "&" in EWW sends pages that EWW cannot render.
     (setq browse-url-secondary-browser-function 'browse-url-generic
           browse-url-generic-program "firefox") ; adjust to firefox, google-chrome, ...
+
+    ;; `&' must ALWAYS leave Emacs — even for URLs the routing table
+    ;; claims (youtube -> mpv, .pdf -> inside Emacs).  The stock
+    ;; `eww-browse-with-external-browser' goes back through `browse-url',
+    ;; where the routing table would re-route those.  This bypass is
+    ;; deterministic: secondary browser, no dispatch.
+    (defun my/eww-open-in-secondary-browser (&optional url)
+      "Open URL (default: the current EWW page) in the secondary browser.
+Bypasses `browse-url-handlers' on purpose: the routing table decides
+what happens INSIDE Emacs; `&' always leaves."
+      (interactive nil eww-mode)
+      (let ((url (or url (plist-get eww-data :url))))
+        (if (functionp browse-url-secondary-browser-function)
+            (funcall browse-url-secondary-browser-function url)
+          ;; Alist form (REGEXP . FN): delegate to `browse-url' with the
+          ;; routing table disarmed so the secondary choice wins.
+          (let ((browse-url-handlers nil)
+                (browse-url-browser-function
+                 browse-url-secondary-browser-function))
+            (browse-url url)))))
+
+    (with-eval-after-load 'eww
+      (define-key eww-mode-map (kbd "&")
+                  #'my/eww-open-in-secondary-browser))
+#+end_src
+
+* Communication
+IRC and RSS read from inside Emacs.  Both setups below are adapted from
+Josh Blais' studium-emacs (https://github.com/joshuablais/studium-emacs):
+renamed to the =my/= convention, reshaped to this configuration's
+use-package style, and wired into the same bounded-networking philosophy
+as the Browsing section (curl subprocesses with deadlines instead of
+unbounded url.el).  Replace every PERSONAL value (nick, channels, feeds)
+with your own.  Two of studium's ERC options were dropped because they no
+longer exist or are obsolete in Emacs 31: =erc-save-queries-on-quit=
+(removed; ERC's =log= module is the modern way to keep logs) and
+=erc-auto-query= (obsolete alias; today's default
+=erc-receive-query-display= of =window-noselect= already shows DMs
+without stealing focus).
+
+** ERC (IRC)
+ERC is built into Emacs 29+, so there is nothing to install.  The
+=move-to-prompt= module pins the input prompt at the bottom, =track=
+reports unread activity per buffer (modeline), =match= plus
+=my/erc-notify-on-mention= produce desktop notifications on mentions, and
+the =fill= module's =erc-fill-wrap= function gives ERC the modern wrapped
+look.  Connect with =C-c i c= or =M-x my/erc-connect=: the NickServ
+password comes from =auth-sources= (put a line like
+=machine irc.libera.chat login YOURNICK password SECRET= into
+=~/.authinfo.gpg=; Libera treats the server password as a NickServ
+identify).  With evil, ERC buffers start in normal state — press =i= at
+the prompt to talk.
+#+begin_src emacs-lisp
+    (use-package erc
+      :ensure nil                    ; built into Emacs 29+
+      :commands (erc erc-tls)
+      :init
+      (setq erc-modules '(autojoin button completion fill irccontrols list
+                                  match menu move-to-prompt netsplit
+                                  networks noncommands readonly ring stamp
+                                  track)
+            erc-server "irc.libera.chat"     ; PERSONAL: your network
+            erc-port 6697
+            erc-nick "ianikeev"             ; PERSONAL: your nick
+            erc-user-full-name "Igor Anikeev"   ; PERSONAL
+            erc-autojoin-channels-alist      ; PERSONAL: your channels
+            '(("Libera.Chat" "#emacs" "#org-mode"))
+            erc-track-shorten-start 8
+            erc-kill-buffer-on-part t
+            erc-fill-column 100
+            erc-fill-function 'erc-fill-wrap
+            erc-fill-wrap-merge t
+            erc-interpret-mirc-color t
+            ;; Wait 10s between reconnect attempts (default 1s) so a dead
+            ;; VPN or link cannot produce a background reconnect storm.
+            erc-server-reconnect-timeout 10)
+      :config
+      (add-hook 'erc-text-matched-hook #'my/erc-notify-on-mention))
+
+    (defun my/erc-connect ()
+      "Connect to IRC over TLS; NickServ password from `auth-sources'."
+      (interactive)
+      (let ((password (auth-source-pick-first-password
+                       :host erc-server :user erc-nick)))
+        (if password
+            (erc-tls :server erc-server :port erc-port
+                     :nick erc-nick :password password)
+          (message "ERC: no auth-source password for %s@%s; connecting without"
+                   erc-nick erc-server)
+          (erc-tls :server erc-server :port erc-port :nick erc-nick))))
+
+    (defun my/erc-notify-on-mention (match-type nickuserhost message)
+      "Desktop notification when someone mentions our nick.
+MATCH-TYPE, NICKUSERHOST and MESSAGE follow `erc-text-matched-hook'
+(the NUH looks like \"bob!~bob@example.org\")."
+      (when (and (eq match-type 'current-nick)
+                 (not (string-match-p "^\\** *Users on " message))
+                 (executable-find "notify-send"))
+        (start-process "erc-notify" nil "notify-send"
+                       "-i" "emacs" "-u" "normal"
+                       (format "ERC: %s" (buffer-name))
+                       (format "%s: %s"
+                               (erc-extract-nick nickuserhost) message))))
+#+end_src
+
+** Elfeed (RSS)
+Elfeed fetches with curl (=elfeed-use-curl t=), for the same reason EWW
+does: a bounded subprocess with Happy Eyeballs instead of Emacs'
+unbounded url.el (60 s per feed, 8 feeds in parallel).  The database
+lives next to the rest of this config in =~/.config/emacs/elfeed/=.  Keys:
+=v= plays the entry's video in mpv (same spirit as the
+=my/browse-url-mpv= routing above), =O= opens the entry through the
+browse-url routing table.  Feeds are the plain =elfeed-feeds= list below
+— swap in your own.  (studium instead syncs against a self-hosted
+Miniflux with the =elfeed-protocol= package and plays videos through
+=elfeed-tube=; that needs your own Miniflux server, so it is left out —
+see the commented block below for elfeed-tube.)
+#+begin_src emacs-lisp
+    (use-package elfeed
+      :ensure t
+      :commands (elfeed elfeed-update)
+      :init
+      (setq elfeed-db-directory
+            (expand-file-name "elfeed" user-emacs-directory)
+            elfeed-search-filter "@1-week-ago +unread"
+            elfeed-use-curl t            ; curl subprocess, not url.el
+            elfeed-curl-max-connections 8
+            elfeed-curl-timeout 60       ; seconds per feed (curl -m)
+            ;; PERSONAL: your feeds.  A few Emacs blogs to start with:
+            elfeed-feeds '("https://planet.emacslife.com/atom.xml"
+                           "https://irreal.org/blog/?feed=rss2"
+                           "https://sachachua.com/blog/feed/"
+                           "https://www.masteringemacs.org/feed"))
+      :config
+      ;; Reuse the EWW fetcher's User-Agent decision: feed hosts run the
+      ;; same anti-bot software as web hosts, and curl's default UA is a
+      ;; guaranteed challenge on some of them.
+      (when (stringp my/eww-curl-user-agent)
+        (setq elfeed-user-agent my/eww-curl-user-agent))
+      (define-key elfeed-search-mode-map (kbd "v")
+                  #'my/elfeed-search-play-in-mpv)
+      (define-key elfeed-show-mode-map (kbd "v")
+                  #'my/elfeed-play-in-mpv)
+      (define-key elfeed-search-mode-map (kbd "O")
+                  #'elfeed-search-browse-url))
+
+    (defun my/elfeed-play-in-mpv ()
+      "Play the URL of the entry shown in `elfeed-show-mode' with mpv."
+      (interactive)
+      (let ((url (elfeed-entry-link elfeed-show-entry)))
+        (unless url (user-error "No URL for this entry"))
+        (start-process "elfeed-mpv" nil "mpv"
+                       "--ytdl-format=bestvideo[height<=1080]+bestaudio/best"
+                       "--save-position-on-quit" url)))
+
+    (defun my/elfeed-search-play-in-mpv ()
+      "Play the URL of the selected `elfeed-search-mode' entry with mpv."
+      (interactive)
+      (let* ((entry (elfeed-search-selected :ignore-region))
+             (url (elfeed-entry-link entry)))
+        (unless url (user-error "No URL for this entry"))
+        (elfeed-untag entry 'unread)
+        (elfeed-search-update-entry entry)
+        (start-process "elfeed-mpv" nil "mpv"
+                       "--ytdl-format=bestvideo[height<=1080]+bestaudio/best"
+                       "--save-position-on-quit" url)))
+
+    ;; Entry points in the C-c leader map (see General Keybindings).
+    (start/leader-keys
+      "i" '(:ignore t :wk "IRC & RSS")
+      "i c" '(my/erc-connect :wk "ERC: connect")
+      "i f" '(elfeed :wk "Elfeed: RSS reader")
+      "i u" '(elfeed-update :wk "Elfeed: update feeds"))
+#+end_src
+
+Optional: YouTube metadata and transcripts inside elfeed.  This block is
+not tangled; to use it, remove the =:tangle no=.
+#+begin_src emacs-lisp :tangle no
+    ;; (use-package elfeed-tube
+    ;;   :ensure t
+    ;;   :after elfeed
+    ;;   :config
+    ;;   (elfeed-tube-setup))
 #+end_src
