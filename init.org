@@ -1,4 +1,4 @@
-#+Title: Kickstart.emacs
+#+Taitle: Kickstart.emacs
 #+Author: MiniApollo
 #+Description: Blazingly fast starting point for your Emacs configuration.
 #+PROPERTY: header-args:emacs-lisp :tangle ./init.el :mkdirp yes
@@ -17,7 +17,6 @@
   - [[#show-startup-time][Show startup time]]
   - [[#network-reliability][Network reliability]]
   - [[#package-manager][Package manager]]
-  - [[#good-defaults][Good Defaults]]
 - [[#important-to-load-first][Important to load first]]
   - [[#evil-mode][Evil Mode]]
   - [[#general-keybindings][General Keybindings]]
@@ -236,12 +235,12 @@ This function checks to see if the file being saved is the init.org file you’r
 automatically exports the configuration here to the associated output files.
 #+begin_src emacs-lisp
     (defun start/org-babel-tangle-config ()
-      "Automatically tangle our init.org config file and refresh `package-quickstart'.
-    Credit to Emacs From Scratch for this one!"
+      "Tangle only init.org, then refresh `package-quickstart'."
       (interactive)
-      (when (string-equal (file-name-directory (buffer-file-name))
-                          (expand-file-name user-emacs-directory))
-        ;; Dynamic scoping to the rescue
+      (when (and (buffer-file-name)
+                 (string-equal (file-name-nondirectory (buffer-file-name)) "init.org")
+                 (string-equal (file-name-directory (buffer-file-name))
+                               (expand-file-name user-emacs-directory)))
         (let ((org-confirm-babel-evaluate nil))
           (org-babel-tangle)
           (package-quickstart-refresh))))
@@ -658,41 +657,30 @@ plus =M-x package-install= by hand.
 
     (defvar my/package-network-down nil
       "Non-nil after the first bootstrap download failure in this session.
-Further missing packages are skipped so that startup still finishes.")
+    Further missing packages are skipped so that startup still finishes.")
 
-    (defun use-package-ensure-installed (package &rest _ignored)
-      "Drop-in replacement for the built-in `use-package-ensure-installed'.
-The stock version refreshes package archives synchronously whenever a
-package is missing from `package-archive-contents', which can freeze
-startup on a broken network.  This one bounds every bootstrap download
-with `my/package-bootstrap-timeout', reports what it skipped, and lets
-startup continue.  Afterwards fix the network (see `my/net-doctor')
-and run: M-x package-refresh-contents, then M-x package-install RET
-PACKAGE."
-      (unless (package-installed-p package)
-        (cond
-         (my/package-network-down
-          (message "[bootstrap] network down; skipping %s" package))
-         (t
+    (setq use-package-ensure-function #'my/ensure-installed)
+
+    (defun my/ensure-installed (name _ensure _state &rest _)
+      "Bounded, network-tolerant package bootstrap via the supported seam."
+      (unless (package-installed-p name)
+        (if my/package-network-down
+            (message "[bootstrap] network down; skipping %s" name)
           (condition-case err
-              (let ((result
-                     (with-timeout (my/package-bootstrap-timeout 'timed-out)
-                       (unless (or my/package-refresh-done
-                                   (assoc package package-archive-contents))
-                         (package-refresh-contents)
-                         (setq my/package-refresh-done t))
-                       (package-install package)
-                       'installed)))
+              (let ((result (with-timeout (my/package-bootstrap-timeout 'timed-out)
+                              (unless (or my/package-refresh-done
+                                          (assoc name package-archive-contents))
+                                (package-refresh-contents)
+                                (setq my/package-refresh-done t))
+                              (package-install name)
+                              'installed)))
                 (unless (eq result 'installed)
                   (setq my/package-network-down t)
-                  (message "[bootstrap] installing %s timed out after %ss; skipping it"
-                           package my/package-bootstrap-timeout)))
+                  (message "[bootstrap] %s timed out; skipping" name)))
             ((error timeout)
              (setq my/package-network-down t)
-             (message "[bootstrap] could not install %s (%s); skipping it"
-                      package (error-message-string err))
-             (message "[bootstrap] once online again: M-x package-refresh-contents, then M-x package-install RET %s"
-                      package)))))))
+             (message "[bootstrap] could not install %s (%s); skipping"
+                      name (error-message-string err)))))))
 #+end_src
 
 **** Most used parts of use-package
@@ -769,7 +757,7 @@ Only works with package.el.
       (async-package-do-action t))
 #+end_src
 
-** Good Defaults
+** COMMENT Good Defaults
 #+begin_src emacs-lisp
     (use-package emacs
       :custom
@@ -777,6 +765,9 @@ Only works with package.el.
       (menu-bar-mode nil)         ; Disable the menu bar
       (scroll-bar-mode nil)       ; Disable the scroll bar
       (tool-bar-mode nil)         ; Disable the tool bar
+      (recentf-mode t)
+      (savehist-mode t)
+      (save-place-mode t)
 
       ;;(inhibit-startup-screen t)  ; Disable welcome screen
 
@@ -801,7 +792,7 @@ Only works with package.el.
       (global-hl-line-mode t)               ; Highlight current line
 
       (native-comp-async-report-warnings-errors 'silent) ; Don't show native comp errors
-      (warning-minimum-level :error) ; Only show errors in warnings buffer
+      (warning-minimum-level :warning)
 
       (mouse-wheel-progressive-speed nil) ; Disable progressive speed when scrolling
       (scroll-conservatively 10) ; Smooth scrolling
@@ -819,8 +810,16 @@ Only works with package.el.
       ;; (display-fill-column-indicator-column 80) ; Set line length indicator to 80 characters
       (whitespace-style '(face tabs tab-mark trailing))
 
-      (make-backup-files nil) ; Stop creating ~ backup files
-      (auto-save-default nil) ; Stop creating # auto save files
+      ;; (make-backup-files nil) + (auto-save-default nil) means a crash
+      ;; or stray kill-emacs loses unsaved prose — risky when you're
+      ;; writing novels. Relocate instead of disabling, and use
+      ;; visited-file auto-save (no #file# clutter):
+      (setq make-backup-files t
+            backup-directory-alist `(("." . ,(locate-user-emacs-file "backups")))
+            auto-save-default nil
+            auto-save-visited-interval 5)
+      (auto-save-visited-mode )
+
       (delete-by-moving-to-trash t)
       :hook
       (prog-mode . hs-minor-mode) ; Enable folding hide/show globally
@@ -837,6 +836,13 @@ Only works with package.el.
              ("C--" . text-scale-decrease)
              ("<C-wheel-up>" . text-scale-increase)
              ("<C-wheel-down>" . text-scale-decrease)))
+
+    ;; Load personal settings (not saved in VC)
+    (load (expand-file-name "private.el" user-emacs-directory) t)
+
+    (use-package gcmh
+      :hook (after-init . gcmh-mode)
+      :custom (gcmh-idle-delay 'auto))
 #+end_src
 
 * Important to load first
@@ -1143,7 +1149,6 @@ You can also create a [[https://github.com/theprimeagen/tmux-sessionizer][tmux-s
 It's useful if you don't use standard project structures (or there is none).
 #+begin_src emacs-lisp
     (use-package projectile
-      :hook (after-init . projectile-mode)
       :config
       (projectile-mode)
       :custom
@@ -1416,8 +1421,6 @@ Write stories and novels with Org-mode.
     (use-package org-novelist
       :vc (:url "https://github.com/ianikeev/org-novelist.git"
                 :rev :newest)  ; Use the latest commit, rather than the latest release. For latest release, remove ":rev :newest"
-      :config
-      (load (expand-file-name "private.el" user-emacs-directory) t)
       :custom
       (org-novelist-automatic-referencing-p nil)  ; Set this variable to
                                                 ; 't' if you want Org
@@ -1460,14 +1463,18 @@ Ghostel is currently the fastest one I've found. It's nearly as fast as a native
 #+begin_src emacs-lisp
     (use-package eat
       :defer t
-      :hook ('eshell-load-hook #'eat-eshell-mode))
+      :hook ((eshell-load . eat-eshell-mode)
+             (eshell-load . eat-eshell-visual-command-mode)))
 #+end_src
 
 *** Exec-path-from-shell
 Make Emacs use the $PATH set up by the user's shell
 #+begin_src emacs-lisp
     (use-package exec-path-from-shell
-      :hook (after-init . exec-path-from-shell-initialize))
+      :defer t
+      :init
+      (when (or (daemonp) (memq initial-window-system '(mac ns x pgtk)))
+        (add-hook 'after-init-hook #'exec-path-from-shell-initialize)))
 #+end_src
 
 * Multi File Example
@@ -1614,7 +1621,7 @@ Read the [[https://github.com/minad/cape#configuration][configuration section]] 
 
         ;; Add Eglot to the front of the list if it's active
         (when (bound-and-true-p eglot--managed-mode)
-          (setq merge-backends (append merge-backends (list #'eglot-completion-at-point))))
+          (setq merge-backends (cons #'eglot-completion-at-point merge-backends)))
 
         ;; Create the super-capf and set it buffer-locally
         (setq-local completion-at-point-functions
@@ -1656,6 +1663,14 @@ One alternative is ivy and counsel, check out the [[https://github.com/MiniApoll
       :custom
       (vertico-cycle t)) ; Enable cycling for `vertico-next/previous'
 
+    (use-package vertico-directory
+      :ensure nil
+      :after vertico
+      :bind (:map vertico-map
+    	      ("RET" . vertico-directory-enter)
+    	      ("DEL" . vertico-directory-delete-char)
+    	      ("M-DEL" . vertico-directory-delete-word)))
+
     (use-package marginalia
       :after vertico
       :config
@@ -1683,7 +1698,10 @@ Recommended for packages like vertico, corfu.
 ** Embark
 Emacs Mini-Buffer Actions Rooted in Keymaps. Right click like menu for Emacs.
 #+begin_src emacs-lisp
-    (use-package embark :defer t)
+    (use-package embark
+      :bind (("C-;" . embark-act)
+             ("C-." . embark-dwim)
+             ("C-h B" . embark-bindings)))
     (use-package embark-consult
       :hook
       (embark-collect-mode . consult-preview-at-point-mode))
@@ -1711,6 +1729,12 @@ Check out their [[https://github.com/minad/consult][git repository]] for more aw
       ;; Enable automatic preview at point in the *Completions* buffer. This is
       ;; relevant when you use the default completion UI.
       :hook (completion-list-mode . consult-preview-at-point-mode)
+      :bind (([remap switch-to-buffer] . consult-buffer)
+    	 ([remap switch-to-buffer-other-window] . consult-buffer-other-window)
+    	 ([remap yank-pop] . consult-yank-pop)
+    	 ([remap goto-line] . consult-goto-line)
+    	 ([remap imenu] . consult-imenu)
+    	 ("M-g o" . consult-outline))
       :init
       ;; Optionally configure the register formatting. This improves the register
       ;; preview for `consult-register', `consult-register-load',
@@ -1822,11 +1846,12 @@ Highlight TODO keywords.
 ** Indent-guide
 Show indentation.
 #+begin_src emacs-lisp
-    (use-package indent-guide
-      :hook
-      (prog-mode . indent-guide-mode)
-      :config
-      (setq indent-guide-char "│")) ; Set the character used for the indent guide.
+    (use-package highlight-indent-guides
+      :hook (prog-mode . highlight-indent-guides-mode)
+      :custom
+      (highlight-indent-guides-method 'character)   ; fast; use 'column for prettier/slower
+      (highlight-indent-guides-responsive 'top)
+      (highlight-indent-guides-delay 0.1))
 #+end_src
 
 ** Which-Key
@@ -1873,17 +1898,17 @@ Common Lisp and Emacs Lisp editing support etc.
        :ensure t
        :hook ((emacs-lisp-mode . enable-paredit-mode)
               (lisp-mode . enable-paredit-mode)
-              (slime-repl-mode . enable-paredit-mode)))
+    	  (paredit-mode . (lambda () (electric-pair-local-mode -1)))))
 
     (use-package aggressive-indent
       :ensure t
-      :hook ((emacs-lisp-mode . aggressive-indent-mode)
-             (lisp-mode . aggressive-indent-mode)))
+      :hook ((slime-repl-mode . enable-paredit-mode)
+    	 (emacs-lisp-mode . aggressive-indent-mode)
+    	 (lisp-mode . aggressive-indent-mode)))
 
     (use-package highlight-defined
       :ensure t
-      :hook ((emacs-lisp-mode . highlight-defined-mode)
-             (lisp-mode . highlight-defined-mode)))
+      :hook ((emacs-lisp-mode . highlight-defined-mode)))
 
     (use-package elisp-refs
       :ensure t)
@@ -2029,10 +2054,10 @@ Shr is the HTML renderer behind EWW; keep pages monospaced and narrow.
 
     (defcustom my/eww-curl-use-cookies t
       "Let the curl fetcher keep a persistent cookie jar.
-Needed for logins and for flows like DuckDuckGo's anti-bot challenge,
-whose verification POST is tied to the session that received it.  The
-jar lives at `my/eww-curl-cookie-jar', next to url.el's own cookie
-file, with the same trust model."
+    Needed for logins and for flows like DuckDuckGo's anti-bot challenge,
+    whose verification POST is tied to the session that received it.  The
+    jar lives at `my/eww-curl-cookie-jar', next to url.el's own cookie
+    file, with the same trust model."
       :type 'boolean)
 
     (defcustom my/eww-curl-cookie-jar
@@ -2042,19 +2067,19 @@ file, with the same trust model."
 
     (defcustom my/eww-curl-user-agent nil
       "User-Agent string for curl page fetches, or nil for curl's own.
-curl's default UA (\"curl/8.x\") is one of the reasons anti-bot
-systems (DuckDuckGo, Cloudflare, ...) challenge text browsers.
-Setting a conventional browser string makes far fewer sites show
-captchas; nil keeps curl's honest default.  See Patch 3."
+    curl's default UA (\"curl/8.x\") is one of the reasons anti-bot
+    systems (DuckDuckGo, Cloudflare, ...) challenge text browsers.
+    Setting a conventional browser string makes far fewer sites show
+    captchas; nil keeps curl's honest default.  See Patch 3."
       :type '(choice (const :tag "curl default" nil) string))
 
     (defun my/url-safe-for-curl (url)
       "Percent-encode characters curl refuses outright in URL arguments.
-DuckDuckGo's anti-bot challenge page ships its form action with a raw,
-unencoded space inside the echoed query (...&q=two words&o=...), and
-curl exits with status 3 (\"URL rejected: Malformed input to a URL
-function\") on any URL containing a space, tab, CR or LF.  Browsers
-percent-encode those silently when submitting forms; so does this."
+    DuckDuckGo's anti-bot challenge page ships its form action with a raw,
+    unencoded space inside the echoed query (...&q=two words&o=...), and
+    curl exits with status 3 (\"URL rejected: Malformed input to a URL
+    function\") on any URL containing a space, tab, CR or LF.  Browsers
+    percent-encode those silently when submitting forms; so does this."
       (replace-regexp-in-string "[[:cntrl:] ]"
                                 (lambda (ch)
                                   (format "%%%02X" (aref ch 0)))
@@ -2062,7 +2087,7 @@ percent-encode those silently when submitting forms; so does this."
 
     (defun my/curl--ensure-cookie-jar ()
       "Create an empty cookie jar file if none exists yet.
-Avoids curl's \"failed to open cookie file\" warning on first use."
+    Avoids curl's \"failed to open cookie file\" warning on first use."
       (unless (file-exists-p my/eww-curl-cookie-jar)
         (make-directory (directory-file-name
                          (file-name-directory my/eww-curl-cookie-jar))
@@ -2119,11 +2144,11 @@ Avoids curl's \"failed to open cookie file\" warning on first use."
 
     (defun my/eww--build-curl-command ()
       "Build the curl argument list for `eww-retrieve-command'.
--g/--globoff stops curl from treating [ ] { } in URLs as filename
-globbing ranges (a URL containing [0-9] would otherwise fetch a dozen
-wrong URLs instead of one); --compressed negotiates gzip;
---connect-timeout 8 bounds the dial; -b/-c keep the persistent cookie
-jar so sessions and challenge flows survive between fetches."
+    -g/--globoff stops curl from treating [ ] { } in URLs as filename
+    globbing ranges (a URL containing [0-9] would otherwise fetch a dozen
+    wrong URLs instead of one); --compressed negotiates gzip;
+    --connect-timeout 8 bounds the dial; -b/-c keep the persistent cookie
+    jar so sessions and challenge flows survive between fetches."
       (append
        (list "curl" "-sS" "-g" "-L" "--compressed"
              "--connect-timeout" "8"
@@ -2135,8 +2160,8 @@ jar so sessions and challenge flows survive between fetches."
 
     (defun my/eww--write-post-data (data)
       "Write POST DATA to a temp file; curl reads it with --data-binary @FILE.
-A file (not the command line) is the right carrier: request bodies can
-be big and may contain bytes that cannot survive an argv array."
+    A file (not the command line) is the right carrier: request bodies can
+    be big and may contain bytes that cannot survive an argv array."
       (let ((file (make-temp-file "eww-post-"))
             (payload (if (multibyte-string-p data)
                          (encode-coding-string data 'utf-8)
@@ -2146,91 +2171,80 @@ be big and may contain bytes that cannot survive an argv array."
           (insert payload))
         file))
 
+    (defun my/eww--content-type (hdrs)
+      "Content-Type of the final response from a curl -D dump."
+      (let ((last (or (car (last (split-string hdrs "\r?\n\r?\n" t))) "")))
+        (if (let ((case-fold-search t))
+              (string-match "^content-type:[ \t]*\\([^\r\n]+\\)" last))
+            (string-trim (match-string 1 last))
+          "text/html; charset=utf-8")))
+
     (defun my/eww-retrieve-with-error-page (orig-fn url callback cbargs)
-      "Around-advice for `eww-retrieve' (v3).
-Replaces the stock external-command fetch with the same process wiring,
-plus:
-- URL sanitizing for curl (fixes curl exit 3 on URLs whose HTML shipped
-  raw spaces - DuckDuckGo's challenge form does exactly that);
-- HTTP POST support: `eww-submit' binds `url-request-method' and
-  `url-request-data' for url.el only; the stock external-command path
-  ignores them, so every form POST (login, captcha, search filters)
-  was silently turned into a bare GET of the action URL;
-- a persistent cookie jar;
-- a diagnostic error page carrying the URL, curl's stderr and the
-  exit-code meaning."
-      (if (not (and (boundp 'eww-retrieve-command)
-                    (consp eww-retrieve-command)))
+      "curl-backed `eww-retrieve' with real headers, redirect tracking, POST, cookies."
+      (if (not (and (boundp 'eww-retrieve-command) (consp eww-retrieve-command)))
           (funcall orig-fn url callback cbargs)
-        (let* ((method (and (boundp 'url-request-method)
-                            (symbol-value 'url-request-method)))
-               (raw-data (and (boundp 'url-request-data)
-                              (symbol-value 'url-request-data)))
-               ;; Only ship a body for non-GET methods; url.el itself only
-               ;; sends `url-request-data' when the method says so.
-               (post-data (and raw-data
-                               (or (not method)
-                                   (not (equal method "GET")))
-                               raw-data))
+        (let* ((method (and (boundp 'url-request-method) (symbol-value 'url-request-method)))
+               (raw-data (and (boundp 'url-request-data) (symbol-value 'url-request-data)))
+               (post-data (and raw-data (or (not method) (not (equal method "GET"))) raw-data))
                (extra-headers (and (boundp 'url-request-extra-headers)
                                    (symbol-value 'url-request-extra-headers)))
                (fetch-url (my/url-safe-for-curl url))
                (header-args nil)
-               (datafile (when post-data
-                           (my/eww--write-post-data post-data)))
+               (datafile (when post-data (my/eww--write-post-data post-data)))
+               (headfile (make-temp-file "eww-hdr-"))
+               (bodyfile (make-temp-file "eww-body-"))
                (buf (generate-new-buffer " *eww retrieve*"))
                (errbuf (generate-new-buffer " *eww error*")))
-          (when my/eww-curl-use-cookies
-            (my/curl--ensure-cookie-jar))
-          (with-current-buffer buf
-            (set-buffer-multibyte nil))
+          (when my/eww-curl-use-cookies (my/curl--ensure-cookie-jar))
+          (with-current-buffer buf (set-buffer-multibyte nil))
           (dolist (h (or extra-headers '()))
             (when (and (consp h) (stringp (car h)) (stringp (cdr h)))
-              (setq header-args
-                    (append header-args
-                            (list "-H" (concat (car h) ": " (cdr h)))))))
+              (setq header-args (append header-args (list "-H" (concat (car h) ": " (cdr h)))))))
           (condition-case err
               (make-process
-               :name "*eww fetch*"
-               :buffer buf
-               :stderr errbuf
-               :command (append
-                         eww-retrieve-command
-                         header-args
-                         (when datafile
-                           (list "--data-binary" (concat "@" datafile)))
-                         (list fetch-url))
+               :name "*eww fetch*" :buffer buf :stderr errbuf
+               :command (append eww-retrieve-command header-args
+                                (when datafile (list "--data-binary" (concat "@" datafile)))
+                                (list "-D" headfile "-o" bodyfile "-w" "%{url_effective}")
+                                (list fetch-url))
                :sentinel
                (lambda (process _event)
                  (unless (process-live-p process)
                    (let* ((exit (process-exit-status process))
+                          (effective (and (buffer-live-p buf)
+                                          (string-trim (with-current-buffer buf (buffer-string)))))
                           (stderr (and (buffer-live-p errbuf)
-                                       (string-trim
-                                        (with-current-buffer errbuf
-                                          (buffer-string))))))
-                     (when (buffer-live-p errbuf)
-                       (when (get-buffer-process errbuf)
-                         (delete-process (get-buffer-process errbuf)))
-                       (kill-buffer errbuf))
-                     (when datafile
-                       (ignore-errors (delete-file datafile)))
+                                       (string-trim (with-current-buffer errbuf (buffer-string)))))
+                          (final-url (if (string-empty-p effective) fetch-url effective)))
+                     (when (buffer-live-p errbuf) (kill-buffer errbuf))
+                     (when datafile (ignore-errors (delete-file datafile)))
                      (when (buffer-live-p buf)
                        (with-current-buffer buf
-                         (unless (zerop exit)
-                           (message "my/eww: curl exit %s fetching %s%s"
-                                    exit fetch-url
-                                    (if (equal stderr "") ""
-                                      (concat " - " stderr)))
-                           (erase-buffer)
-                           (insert (encode-coding-string
-                                    (my/eww--curl-error-page fetch-url exit stderr)
-                                    'utf-8)))
-                         (goto-char (point-min))
-                         (insert "Content-type: text/html; charset=utf-8\n\n")
-                         (apply callback nil cbargs)))))))
+                         (erase-buffer)
+                         (if (not (zerop exit))
+                             (progn
+                               (message "my/eww: curl exit %s fetching %s%s" exit fetch-url
+                                        (if (string= stderr "") "" (concat " - " stderr)))
+                               (insert (encode-coding-string
+                                        (my/eww--curl-error-page fetch-url exit stderr) 'utf-8))
+                               (goto-char (point-min))
+                               (insert "Content-type: text/html; charset=utf-8\n\n")
+                               (apply callback nil cbargs))
+                           (let ((ct (my/eww--content-type
+                                      (with-temp-buffer (insert-file-contents headfile) (buffer-string))))
+                                 (body (with-temp-buffer (set-buffer-multibyte nil)
+    						     (insert-file-contents bodyfile) (buffer-string))))
+                             (insert "Content-type: " ct "\n\n")
+                             (insert body))
+                           (goto-char (point-min))
+                           ;; make relative links/history use the post-redirect URL
+                           (apply callback nil (cons final-url (cdr cbargs))))))
+                     (ignore-errors (delete-file headfile))
+                     (ignore-errors (delete-file bodyfile))))))
             (error
-             (when datafile
-               (ignore-errors (delete-file datafile)))
+             (when datafile (ignore-errors (delete-file datafile)))
+             (ignore-errors (delete-file headfile))
+             (ignore-errors (delete-file bodyfile))
              (ignore-errors (kill-buffer buf))
              (ignore-errors (kill-buffer errbuf))
              (signal (car err) (cdr err)))))))
@@ -2244,10 +2258,10 @@ plus:
 
     (defun my/eww-toggle-fetch-backend ()
       "Flip EWW between the curl subprocess fetcher and Emacs' built-in url.el.
-url.el understands NSM certificate prompts and proxies, but it has NO
-fetch timeout - the original \"Loading ...\" freezes are possible again
-while it is active.  Treat this as a one-off escape hatch for a site
-that misbehaves under curl, not as a mode."
+    url.el understands NSM certificate prompts and proxies, but it has NO
+    fetch timeout - the original \"Loading ...\" freezes are possible again
+    while it is active.  Treat this as a one-off escape hatch for a site
+    that misbehaves under curl, not as a mode."
       (interactive)
       (unless (boundp 'eww-retrieve-command)
         (require 'eww))
@@ -2264,32 +2278,38 @@ that misbehaves under curl, not as a mode."
     ;; timeout — hangs for minutes on a broken network), curl enforces
     ;; its own DNS/connect/transfer deadlines.  Shares the cookie jar
     ;; with page fetches, so authenticated downloads keep working.
-    (defun my/curl-download (url dest &optional timeout)
-      "Download URL to DEST with curl, bounded by TIMEOUT seconds (default 30)."
+    ;; Now it takes a _callback_
+    (defun my/curl-download (url dest callback &optional timeout)
+      "Download URL to DEST asynchronously; call CALLBACK with DEST on success."
       (if (not (executable-find "curl"))
-          (url-copy-file url dest t)
-        (when my/eww-curl-use-cookies
-          (my/curl--ensure-cookie-jar))
-        (let ((exit (apply #'call-process "curl" nil nil nil
-                           (append
-                            (list "-sS" "-g" "-L" "-f"
+          (progn (url-copy-file url dest t) (funcall callback dest))
+        (when my/eww-curl-use-cookies (my/curl--ensure-cookie-jar))
+        (let ((errbuf (generate-new-buffer " *curl-download stderr*")))
+          (make-process
+           :name "curl-download" :buffer nil :stderr errbuf
+           :command (append (list "curl" "-sS" "-g" "-L" "-f"
                                   "-m" (number-to-string (or timeout 30)))
                             (when my/eww-curl-use-cookies
-                              (list "-b" my/eww-curl-cookie-jar
-                                    "-c" my/eww-curl-cookie-jar))
-                            (when my/eww-curl-user-agent
-                              (list "-A" my/eww-curl-user-agent))
-                            (list "-o" dest "--"
-                                  (my/url-safe-for-curl url))))))
-          (unless (zerop exit)
-            (ignore-errors (delete-file dest))
-            (error "Download failed (curl: %s): %s"
-                   (my/net-doctor--curl-exit exit) url))
-          dest)))
+                              (list "-b" my/eww-curl-cookie-jar "-c" my/eww-curl-cookie-jar))
+                            (when my/eww-curl-user-agent (list "-A" my/eww-curl-user-agent))
+                            (list "-o" dest "--" (my/url-safe-for-curl url)))
+           :sentinel
+           (lambda (proc _event)
+             (unless (process-live-p proc)
+               (let ((exit (process-exit-status proc))
+                     (errs (and (buffer-live-p errbuf)
+                                (string-trim (with-current-buffer errbuf (buffer-string))))))
+                 (when (buffer-live-p errbuf) (kill-buffer errbuf))
+                 (if (zerop exit)
+                     (funcall callback dest)
+                   (ignore-errors (delete-file dest))
+                   (message "Download failed (curl: %s): %s%s"
+                            (my/net-doctor--curl-exit exit) url
+                            (if (string= errs "") "" (concat " - " errs)))))))))))
 
     (defun my/eww-download-image-at-point ()
       "Download the image at point to `eww-download-directory'.
-Uses `my/curl-download' (20 s deadline) instead of `url-copy-file'."
+    Uses `my/curl-download' (20 s deadline) instead of `url-copy-file'."
       (interactive)
       (let ((url (or (get-text-property (point) 'image-url)
                      (get-text-property (point) 'shr-url))))
@@ -2304,7 +2324,7 @@ Uses `my/curl-download' (20 s deadline) instead of `url-copy-file'."
                          name))
                  (dest (expand-file-name name eww-download-directory)))
             (make-directory eww-download-directory t)
-            (my/curl-download url dest 20)
+            (my/curl-download url dest (lambda (f) (message "Saved: %s" f)) 20)
             (message "Saved: %s" dest)))))
 #+end_src
 
@@ -2358,15 +2378,11 @@ which is what un-breaks =&= (open the current page in Firefox).
         (eww-browse-url url)))
 
     (defun my/browse-url-pdf (url &rest _args)
-      "Fetch a remote PDF and open it inside Emacs.
-Uses pdf-tools when installed, built-in doc-view otherwise.
-Downloads via `my/curl-download' (60 s deadline), not `url-copy-file',
-which hangs on the broken networks that got you here."
       (let ((tmp (make-temp-file "emacs-pdf-" nil ".pdf")))
-        (my/curl-download url tmp 60)
-        (find-file-other-window tmp)
-        (when (fboundp 'pdf-view-mode)
-          (pdf-view-mode))))
+        (my/curl-download url tmp
+    		      (lambda (f) (find-file-other-window f)
+    			(when (fboundp 'pdf-view-mode) (pdf-view-mode)))
+    		      60)))
 
     ;; Gopher and gemini, the smolweb.  Loaded eagerly on purpose so
     ;; `elpher-browse-url-elpher' is defined when a gemini:// link is
@@ -2377,8 +2393,8 @@ which hangs on the broken networks that got you here."
     ;; Render PDFs with pdf-tools instead of doc-view.  Delete this block
     ;; if you prefer doc-view; the handler above copes either way.
     (use-package pdf-tools
-      :ensure t
-      :mode ("\\.pdf\\'" . pdf-view-mode))
+      :mode ("\\.pdf\\'" . pdf-view-mode)
+      :config (pdf-loader-install))
 
     ;; First matching regexp wins.  Do NOT put a "." catch-all in this
     ;; table: `browse-url' consults `browse-url-handlers' BEFORE falling
@@ -2413,8 +2429,8 @@ which hangs on the broken networks that got you here."
     ;; deterministic: secondary browser, no dispatch.
     (defun my/eww-open-in-secondary-browser (&optional url)
       "Open URL (default: the current EWW page) in the secondary browser.
-Bypasses `browse-url-handlers' on purpose: the routing table decides
-what happens INSIDE Emacs; `&' always leaves."
+    Bypasses `browse-url-handlers' on purpose: the routing table decides
+    what happens INSIDE Emacs; `&' always leaves."
       (interactive nil eww-mode)
       (let ((url (or url (plist-get eww-data :url))))
         (if (functionp browse-url-secondary-browser-function)
@@ -2468,8 +2484,6 @@ the prompt to talk.
                                   track)
             erc-server "irc.libera.chat"     ; PERSONAL: your network
             erc-port 6697
-            erc-nick "ianikeev"             ; PERSONAL: your nick
-            erc-user-full-name "Igor Anikeev"   ; PERSONAL
             erc-autojoin-channels-alist      ; PERSONAL: your channels
             '(("Libera.Chat" "#emacs" "#org-mode"))
             erc-track-shorten-start 8
@@ -2533,23 +2547,7 @@ see the commented block below for elfeed-tube.)
             elfeed-use-curl t            ; curl subprocess, not url.el
             elfeed-curl-max-connections 8
             elfeed-curl-timeout 60       ; seconds per feed (curl -m)
-            ;; PERSONAL: your feeds.  A few Emacs blogs to start with:
-            elfeed-feeds
-      '(("https://planet.kde.org/atom.xml" kde)
-        ("https://habr.com/ru/rss/articles/?fl=ru" my-feeds)
-        ("https://stelachiamnurkritikas.wordpress.com/feed/" my-feeds)
-        ("https://www.linux.org.ru/section-rss.jsp?section=1" my-feeds)
-        ("http://elerussians.blogspot.com/feeds/posts/default"
-         my-feeds)
-        ("http://lj.rossia.org/users/tiphareth/data/rss" my-feeds)
-        ("https://dpmmax.livejournal.com/data/rss" my-feeds)
-        ("https://bohemicus.livejournal.com/data/rss" my-feeds)
-        ("https://feeds.arstechnica.com/arstechnica/index" my-feeds)
-        ("https://exler.es/blog/rss.xml" my-feeds)
-        "https://planet.emacslife.com/atom.xml"
-        "https://irreal.org/blog/?feed=rss2"
-        "https://sachachua.com/blog/feed/"
-        "https://www.masteringemacs.org/feed"))
+
       :config
       ;; Reuse the EWW fetcher's User-Agent decision: feed hosts run the
       ;; same anti-bot software as web hosts, and curl's default UA is a

@@ -69,3 +69,6 @@ site-lisp/package/
 private.el
 # If you only want to use init.org
 /init.el
+/url/
+/elfeed/
+/backups/
