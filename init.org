@@ -1067,7 +1067,7 @@ Set fonts in the early-init.el file
 ** Set Theme
 A megapack of themes for GNU Emacs.
 Use consult-theme to easily try out themes (*Epilepsy* Warning).
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle no
     (use-package doom-themes
       :custom
       ;; Global settings (defaults)
@@ -1077,6 +1077,13 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
       (load-theme 'doom-gruvbox t) ; We need to add t to trust this package
       ;; Corrects (and improves) org-mode's native fontification.
       (doom-themes-org-config))
+#+end_src
+
+#+begin_src emacs-lisp
+    (use-package auto-dark
+      :ensure t
+      :custom (auto-dark-themes '((modus-vivendi) (modus-operandi)))
+      :config (auto-dark-mode 1))
 #+end_src
 
 ** Transparency
