@@ -2527,10 +2527,22 @@ see the commented block below for elfeed-tube.)
             elfeed-curl-max-connections 8
             elfeed-curl-timeout 60       ; seconds per feed (curl -m)
             ;; PERSONAL: your feeds.  A few Emacs blogs to start with:
-            elfeed-feeds '("https://planet.emacslife.com/atom.xml"
-                           "https://irreal.org/blog/?feed=rss2"
-                           "https://sachachua.com/blog/feed/"
-                           "https://www.masteringemacs.org/feed"))
+            elfeed-feeds
+      '(("https://planet.kde.org/atom.xml" kde)
+        ("https://habr.com/ru/rss/articles/?fl=ru" my-feeds)
+        ("https://stelachiamnurkritikas.wordpress.com/feed/" my-feeds)
+        ("https://www.linux.org.ru/section-rss.jsp?section=1" my-feeds)
+        ("http://elerussians.blogspot.com/feeds/posts/default"
+         my-feeds)
+        ("http://lj.rossia.org/users/tiphareth/data/rss" my-feeds)
+        ("https://dpmmax.livejournal.com/data/rss" my-feeds)
+        ("https://bohemicus.livejournal.com/data/rss" my-feeds)
+        ("https://feeds.arstechnica.com/arstechnica/index" my-feeds)
+        ("https://exler.es/blog/rss.xml" my-feeds)
+        "https://planet.emacslife.com/atom.xml"
+        "https://irreal.org/blog/?feed=rss2"
+        "https://sachachua.com/blog/feed/"
+        "https://www.masteringemacs.org/feed"))
       :config
       ;; Reuse the EWW fetcher's User-Agent decision: feed hosts run the
       ;; same anti-bot software as web hosts, and curl's default UA is a
@@ -2564,6 +2576,56 @@ see the commented block below for elfeed-tube.)
         (start-process "elfeed-mpv" nil "mpv"
                        "--ytdl-format=bestvideo[height<=1080]+bestaudio/best"
                        "--save-position-on-quit" url)))
+
+    (defun my/elfeed--tagify (name)
+      "Convert an OPML folder NAME into an Elfeed tag symbol."
+      (let* ((s (downcase name))
+             (s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
+             (s (replace-regexp-in-string "\\`-+\\|-+$" "" s)))
+        (if (equal s "") nil (intern s))))
+
+    (defun my/elfeed--opml-tagged (xml tags)
+      "Like `elfeed--parse-opml', but OPML folder names become tags.
+    XML is a tree from `elfeed-xml-parse-file'; TAGS is accumulated."
+      (cl-loop for (_tag attr . content) in (cl-remove-if-not #'listp xml)
+               if (assoc 'xmlUrl attr)
+               collect (if tags (cons (cdr it) tags) (cdr it))
+               else append
+               (let* ((name (or (cdr (assoc 'text attr))
+                                (cdr (assoc 'title attr))))
+                      (tag (and name (my/elfeed--tagify name))))
+                 (my/elfeed--opml-tagged
+                  content (if tag (cons tag tags) tags)))))
+
+    (defun my/elfeed-import-opml (file)
+      "Import feeds from an OPML FILE into `elfeed-feeds'.
+    Folder names become tags; existing feeds are kept, duplicate URLs
+    dropped.  Shows a paste-ready (setq elfeed-feeds ...) form for init.org."
+      (interactive "fOPML file: ")
+      (require 'elfeed)
+      (require 'cl-lib)
+      (let* ((xml (elfeed-xml-parse-file file))
+             (imported (my/elfeed--opml-tagged xml nil))
+             (seen (make-hash-table :test #'equal))
+             (entries (cl-loop for entry in (append imported elfeed-feeds)
+                               for url = (if (consp entry) (car entry) entry)
+                               for tags = (and (consp entry) (cdr entry))
+                               unless (gethash url seen)
+                               collect (progn (puthash url t seen)
+                                              (if tags (cons url tags) url)))))
+        (setf elfeed-feeds entries)
+        (with-current-buffer (get-buffer-create "*elfeed-feeds-import*")
+          (erase-buffer)
+          (insert (format ";; %d entries imported from %s, %d unique feeds.\n"
+                          (length imported) (abbreviate-file-name file)
+                          (length entries))
+                  ";; Paste this form over the elfeed-feeds value in init.org:\n\n"
+                  (pp-to-string `(setq elfeed-feeds ',entries)))
+          (emacs-lisp-mode)
+          (goto-char (point-min)))
+        (pop-to-buffer "*elfeed-feeds-import*")
+        (message "Elfeed: %d entries imported, %d unique feeds total"
+                 (length imported) (length entries))))
 
     ;; Entry points in the C-c leader map (see General Keybindings).
     (start/leader-keys
