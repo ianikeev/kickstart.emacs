@@ -17,6 +17,7 @@
   - [[#show-startup-time][Show startup time]]
   - [[#network-reliability][Network reliability]]
   - [[#package-manager][Package manager]]
+  - [[#good-defaults][Good Defaults]]
 - [[#important-to-load-first][Important to load first]]
   - [[#evil-mode][Evil Mode]]
   - [[#general-keybindings][General Keybindings]]
@@ -242,8 +243,7 @@ automatically exports the configuration here to the associated output files.
                  (string-equal (file-name-directory (buffer-file-name))
                                (expand-file-name user-emacs-directory)))
         (let ((org-confirm-babel-evaluate nil))
-          (org-babel-tangle)
-          (package-quickstart-refresh))))
+          (org-babel-tangle))))
 
     (add-hook 'org-mode-hook (lambda () (add-hook 'after-save-hook #'start/org-babel-tangle-config)))
 #+end_src
@@ -740,7 +740,7 @@ Avg:
 Package quickstart only works with package.el.
 If you plan to use a different package manager, remember to remove this section and the package-quickstart-refresh line in the Auto-tangle hook.
 #+begin_src emacs-lisp
-    (setq package-quickstart t) ; For blazingly fast startup times, this line makes startup miles faster
+    (setq package-quickstart nil) ; For blazingly fast startup times, this line makes startup miles faster
 #+end_src
 
 *** Package Async
@@ -757,7 +757,7 @@ Only works with package.el.
       (async-package-do-action t))
 #+end_src
 
-** COMMENT Good Defaults
+** Good Defaults
 #+begin_src emacs-lisp
     (use-package emacs
       :custom
@@ -792,7 +792,7 @@ Only works with package.el.
       (global-hl-line-mode t)               ; Highlight current line
 
       (native-comp-async-report-warnings-errors 'silent) ; Don't show native comp errors
-      (warning-minimum-level :warning)
+      (warning-minimum-level :error)
 
       (mouse-wheel-progressive-speed nil) ; Disable progressive speed when scrolling
       (scroll-conservatively 10) ; Smooth scrolling
@@ -1846,12 +1846,8 @@ Highlight TODO keywords.
 ** Indent-guide
 Show indentation.
 #+begin_src emacs-lisp
-    (use-package highlight-indent-guides
-      :hook (prog-mode . highlight-indent-guides-mode)
-      :custom
-      (highlight-indent-guides-method 'character)   ; fast; use 'column for prettier/slower
-      (highlight-indent-guides-responsive 'top)
-      (highlight-indent-guides-delay 0.1))
+    (use-package indent-guide
+      :hook (prog-mode . indent-guide-mode))
 #+end_src
 
 ** Which-Key
@@ -2546,7 +2542,7 @@ see the commented block below for elfeed-tube.)
             elfeed-search-filter "@1-week-ago +unread"
             elfeed-use-curl t            ; curl subprocess, not url.el
             elfeed-curl-max-connections 8
-            elfeed-curl-timeout 60       ; seconds per feed (curl -m)
+            elfeed-curl-timeout 60)       ; seconds per feed (curl -m)
 
       :config
       ;; Reuse the EWW fetcher's User-Agent decision: feed hosts run the
