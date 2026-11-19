@@ -2589,6 +2589,9 @@ see the commented block below for elfeed-tube.)
       (setq httpd-host "0.0.0.0"
             httpd-port 8765))
 
+    ;; Start automatically
+    (add-hook 'emacs-startup-hook #'elfeed-web-start)
+
     (defun my/elfeed-play-in-mpv ()
       "Play the URL of the entry shown in `elfeed-show-mode' with mpv."
       (interactive)
