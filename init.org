@@ -1910,8 +1910,29 @@ Common Lisp and Emacs Lisp editing support etc.
     (use-package aggressive-indent
       :ensure t
       :hook ((slime-repl-mode . enable-paredit-mode)
-    	 (emacs-lisp-mode . aggressive-indent-mode)
-    	 (lisp-mode . aggressive-indent-mode)))
+    	     (emacs-lisp-mode . aggressive-indent-mode)
+    	     (lisp-mode . aggressive-indent-mode))
+      :config
+      (defun my/aggressive-indent-in-use-package-p ()
+        "Return non-nil when point is in a use-package form."
+        (and (derived-mode-p 'emacs-lisp-mode)
+             (save-excursion
+               (let ((found nil)
+                     (continue t))
+                 (while (and continue (not found))
+                   (when (looking-at "(use-package\\_>")
+                     (setq found t))
+                   (unless found
+                     (setq continue
+                           (condition-case nil
+                               (progn (backward-up-list 1) t)
+                             (error nil)))))
+                 found))))
+
+      (add-to-list 'aggressive-indent-dont-indent-if
+                   '(my/aggressive-indent-in-use-package-p))
+
+      (global-aggressive-indent-mode 1))
 
     (use-package highlight-defined
       :ensure t
@@ -2677,6 +2698,13 @@ not tangled; to use it, remove the =:tangle no=.
     (use-package elfeed-tube
       :ensure t
       :after elfeed
+      :demand t
+      :bind (:map elfeed-show-mode-map
+                  ("F" . elfeed-tube-fetch)
+                  ([remap save-buffer] . elfeed-tube-save)
+             :map elfeed-search-mode-map
+                  ("F" . elfeed-tube-fetch)
+                  ([remap save-buffer] . elfeed-tube-save))
       :config
       (elfeed-tube-setup)
       (setq elfeed-tube-captions-languages
@@ -2688,11 +2716,15 @@ not tangled; to use it, remove the =:tangle no=.
 
     (use-package elfeed-tube-mpv
       :ensure t
-      :after elfeed)
+      :after elfeed
+      :bind
+      (:map elfeed-show-mode-map
+            ("v" . elfeed-tube-mpv)
+            ("C-c C-f" . elfeed-tube-mpv-follow-mode)
+            ("C-c C-w" . elfeed-tube-mpv-where)))
 #+end_src
 
 ** Telegram Support
-
 Install TDLib according to the instructions at https://zevlg.github.io/telega.el/ and then pin the package to stable.
 
 #+begin_src emacs-lisp
