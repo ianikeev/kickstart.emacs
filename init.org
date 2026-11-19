@@ -1,4 +1,4 @@
-#+Taitle: Kickstart.emacs
+#+Title: Kickstart.emacs
 #+Author: MiniApollo
 #+Description: Blazingly fast starting point for your Emacs configuration.
 #+PROPERTY: header-args:emacs-lisp :tangle ./init.el :mkdirp yes
@@ -69,6 +69,7 @@
 - [[#communication][Communication]]
   - [[#erc-irc][ERC (IRC)]]
   - [[#elfeed-rss][Elfeed (RSS)]]
+  - [[#telegram-support][Telegram Support]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -718,6 +719,7 @@ This code block is not tangled, it is just an example.
 Like Linux distributions, Emacs uses repositories to manage its packages.
 #+begin_src emacs-lisp
     (setq package-archives '(("melpa" . "https://melpa.org/packages/") ; Sets default package repositories
+                             ("melpa-stable" . "https://stable.melpa.org/packages/") ; For telega.el
                              ("elpa" . "https://elpa.gnu.org/packages/")
                              ("nongnu" . "https://elpa.nongnu.org/nongnu/"))) ; For Eat Terminal
 #+end_src
@@ -1086,9 +1088,18 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
 #+end_src
 
 #+begin_src emacs-lisp
+    (use-package ef-themes
+      :ensure t
+      :init
+      (ef-themes-take-over-modus-themes-mode 1)
+      :config
+      (setq modus-themes-mixed-fonts t)
+      (setq modus-themes-italic-constructs t))
+
     (use-package auto-dark
       :ensure t
-      :custom (auto-dark-themes '((modus-vivendi) (modus-operandi)))
+      ;; :custom (auto-dark-themes '((modus-vivendi) (modus-operandi)))
+      :custom (auto-dark-themes '((ef-dark) (ef-light)))
       :config (auto-dark-mode 1))
 #+end_src
 
@@ -2543,7 +2554,12 @@ see the commented block below for elfeed-tube.)
             elfeed-use-curl t            ; curl subprocess, not url.el
             elfeed-curl-max-connections 8
             elfeed-curl-timeout 60)       ; seconds per feed (curl -m)
-
+      :bind (:map elfeed-search-mode-map
+                  ("j" . next-line)
+                  ("k" . previous-line)
+                  :map elfeed-show-mode-map
+                  ("j" . scroll-up-command)
+                  ("k" . scroll-down-command))
       :config
       ;; Reuse the EWW fetcher's User-Agent decision: feed hosts run the
       ;; same anti-bot software as web hosts, and curl's default UA is a
@@ -2556,6 +2572,22 @@ see the commented block below for elfeed-tube.)
                   #'my/elfeed-play-in-mpv)
       (define-key elfeed-search-mode-map (kbd "O")
                   #'elfeed-search-browse-url))
+
+    (defun my/elfeed-web-stop ()
+      "Disable Elfeed web and stop the HTTP server"
+      (interactive)
+      (elfeed-web-stop)
+      (httpd-stop))
+
+    (use-package elfeed-web
+      :ensure t
+      :after elfeed
+      :commands (elfeed-web-start elfeed-web-stop)
+      :bind (("C-c i w r" . elfeed-web-start)
+             ("C-c i w h" . my/elfeed-web-stop))
+      :config
+      (setq httpd-host "0.0.0.0"
+            httpd-port 8765))
 
     (defun my/elfeed-play-in-mpv ()
       "Play the URL of the entry shown in `elfeed-show-mode' with mpv."
@@ -2644,4 +2676,23 @@ not tangled; to use it, remove the =:tangle no=.
     ;;   :after elfeed
     ;;   :config
     ;;   (elfeed-tube-setup))
+#+end_src
+
+** Telegram Support
+
+Install TDLib according to the instructions at https://zevlg.github.io/telega.el/ and then pin the package to stable.
+
+#+begin_src emacs-lisp
+    (use-package telega
+      :ensure t
+      :pin melpa
+      :config
+      (setq telega-filters-custom
+            '(("Main" . main)
+              ("Important" . important)
+              ("Unread" . unread)
+              ("Unread&Unmuted" . (and unread unmuted))
+              ("Groups" . (type basicgroup supergroup))
+              ("Channels" . (type channel))))
+      :commands (telega))
 #+end_src
