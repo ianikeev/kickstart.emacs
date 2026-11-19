@@ -2695,17 +2695,11 @@ see the commented block below for elfeed-tube.)
 
 Optional: YouTube metadata and transcripts inside elfeed.  This block is
 not tangled; to use it, remove the =:tangle no=.
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp
     (use-package elfeed-tube
       :ensure t
       :after elfeed
       :demand t
-      :bind (:map elfeed-show-mode-map
-                  ("F" . elfeed-tube-fetch)
-                  ([remap save-buffer] . elfeed-tube-save)
-             :map elfeed-search-mode-map
-                  ("F" . elfeed-tube-fetch)
-                  ([remap save-buffer] . elfeed-tube-save))
       :config
       (elfeed-tube-setup)
       (setq elfeed-tube-captions-languages
@@ -2713,7 +2707,17 @@ not tangled; to use it, remove the =:tangle no=.
               "english (auto generated)"
               "spanish (auto generated)"
               "esperanto (auto generated)"
-              "russian (auto generated)")))
+              "russian (auto generated)"))
+
+      (with-eval-after-load 'elfeed-show
+        (keymap-set elfeed-show-mode-map "F" #'elfeed-tube-fetch)
+        (keymap-set elfeed-show-mode-map
+                    "<remap> <save-buffer>" #'elfeed-tube-save))
+
+      (with-eval-after-load 'elfeed-search
+        (keymap-set elfeed-search-mode-map "F" #'elfeed-tube-fetch)
+        (keymap-set elfeed-search-mode-map
+                    "<remap> <save-buffer>" #'elfeed-tube-save)))
 
     (use-package elfeed-tube-mpv
       :ensure t
