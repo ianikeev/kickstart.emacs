@@ -70,6 +70,7 @@
   - [[#erc-irc][ERC (IRC)]]
   - [[#elfeed-rss][Elfeed (RSS)]]
   - [[#telegram-support][Telegram Support]]
+  - [[#add-denote][Add Denote]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -1442,26 +1443,26 @@ Write stories and novels with Org-mode.
                                                 ; operating on complex
                                                 ; stories. It defaults
                                                 ; to 'nil' when not set
-      :bind (("C-c n n s" . org-novelist-new-story)
+      :bind (("C-c N n s" . org-novelist-new-story)
              :map org-novelist-mode-map
-             ("C-c n n c" . org-novelist-new-chapter)
-             ("C-c n d c" . org-novelist-destroy-chapter)
-             ("C-c n r c" . org-novelist-rename-chapter)
-             ("C-c n n a" . org-novelist-new-character)
-             ("C-c n d a" . org-novelist-destroy-character)
-             ("C-c n r a" . org-novelist-rename-character)
-             ("C-c n n p" . org-novelist-new-prop)
-             ("C-c n d p" . org-novelist-destroy-prop)
-             ("C-c n r p" . org-novelist-rename-prop)
-             ("C-c n n l" . org-novelist-new-place)
-             ("C-c n d l" . org-novelist-destroy-place)
-             ("C-c n r l" . org-novelist-rename-place)
-             ("C-c n u"   . org-novelist-update-references)
-             ("C-c n r s" . org-novelist-rename-story)
-             ("C-c n e"   . org-novelist-export-story)
-             ("C-c n l l" . org-novelist-link-to-story)
-             ("C-c n l u" . org-novelist-unlink-from-story)
-             ("C-c n t"   . org-novelist-toggle-automatic-referencing)))
+             ("C-c N n c" . org-novelist-new-chapter)
+             ("C-c N d c" . org-novelist-destroy-chapter)
+             ("C-c N r c" . org-novelist-rename-chapter)
+             ("C-c N n a" . org-novelist-new-character)
+             ("C-c N d a" . org-novelist-destroy-character)
+             ("C-c N r a" . org-novelist-rename-character)
+             ("C-c N n p" . org-novelist-new-prop)
+             ("C-c N d p" . org-novelist-destroy-prop)
+             ("C-c N r p" . org-novelist-rename-prop)
+             ("C-c N n l" . org-novelist-new-place)
+             ("C-c N d l" . org-novelist-destroy-place)
+             ("C-c N r l" . org-novelist-rename-place)
+             ("C-c N u"   . org-novelist-update-references)
+             ("C-c N r s" . org-novelist-rename-story)
+             ("C-c N e"   . org-novelist-export-story)
+             ("C-c N l l" . org-novelist-link-to-story)
+             ("C-c N l u" . org-novelist-unlink-from-story)
+             ("C-c N t"   . org-novelist-toggle-automatic-referencing)))
 #+end_src
 ** Terminal
 *** Eat
@@ -2740,4 +2741,28 @@ Install TDLib according to the instructions at https://zevlg.github.io/telega.el
               ("Groups" . (type basicgroup supergroup))
               ("Channels" . (type channel))))
       :commands (telega))
+#+end_src
+
+** Add Denote
+#+begin_src emacs-lisp
+    (use-package denote
+      :ensure t
+      :custom
+      (denote-directory (expand-file-name "~/Documents/notes/"))
+      (denote-file-type 'org)
+      (denote-sort-keywords t)
+      (denote-date-prompt-use-org-read-date t)
+      :bind
+      (("C-c n n" . denote)                      ; new note
+       ("C-c n f" . consult-denote-find)         ; find note, with preview
+       ("C-c n g" . consult-denote-grep)         ; full-text search (or denote-grep)
+       ("C-c n d" . denote-dired)                ; filtered/sorted Dired (a.k.a. denote-sort-dired)
+       ("C-c n l" . denote-link)                 ; link to a note (C-c C-o follows it)
+       ("C-c n L" . denote-add-links)            ; batch-link notes matching a keyword
+       ("C-c n b" . denote-backlinks)            ; who links here
+       ("C-c n r" . denote-rename-file)          ; safe rename, updates all links
+       ("C-c n R" . denote-rename-file-using-front-matter)
+       ("C-c n j" . denote-journal-new-or-existing-entry)
+       ("C-c n q c" . denote-query-contents-link) ; link that greps contents when opened
+       ("C-c n q f" . denote-query-filenames-link)))
 #+end_src
