@@ -836,6 +836,7 @@ Only works with package.el.
              ([escape] . keyboard-escape-quit) ; Makes Escape quit prompts (Minibuffer Escape)
              ;; Zooming In/Out
              ("C-+" . text-scale-increase)
+             ("C-=" . text-scale-increase)
              ("C--" . text-scale-decrease)
              ("<C-wheel-up>" . text-scale-increase)
              ("<C-wheel-down>" . text-scale-decrease)))
@@ -1274,7 +1275,7 @@ After Emacs 31, you only need to manage the sources for external packages, becau
 To explore the current buffer's syntax tree, use the treesit-explore command.
 
 *To use it, remove :tangle no from the beginning of the source code block.*
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp
     (use-package emacs
       :custom
       (treesit-font-lock-level 3)
