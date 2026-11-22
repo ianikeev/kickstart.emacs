@@ -71,6 +71,7 @@
   - [[#elfeed-rss][Elfeed (RSS)]]
   - [[#telegram-support][Telegram Support]]
   - [[#add-denote][Add Denote]]
+  - [[#ace-window-setup][Ace-window setup]]
 
 * Introduction
 #+begin_src emacs-lisp :tangle no
@@ -1107,7 +1108,7 @@ Use consult-theme to easily try out themes (*Epilepsy* Warning).
 
 ** Transparency
 With Emacs version 29, true transparency has been added.
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle no
     (add-to-list 'default-frame-alist '(alpha-background . 100)) ; For all new frames henceforth
 
     ;; Transparency in terminal
@@ -2772,4 +2773,17 @@ Install TDLib according to the instructions at https://zevlg.github.io/telega.el
        ("C-c n j" . denote-journal-new-or-existing-entry)
        ("C-c n q c" . denote-query-contents-link) ; link that greps contents when opened
        ("C-c n q f" . denote-query-filenames-link)))
+#+end_src
+
+** Ace-window setup
+Bound to =M-0=.
+#+begin_src emacs-lisp
+    (use-package ace-window
+      :ensure t
+      :bind
+      ("M-o" . ace-window)
+      :custom
+      (aw-scope 'frame)
+      (aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+      (aw-dispatch-always 1))
 #+end_src
